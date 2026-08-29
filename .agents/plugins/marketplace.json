@@ -1,0 +1,20 @@
+{
+  "name": "multi-agent-memory",
+  "interface": {
+    "displayName": "Multi-Agent Memory"
+  },
+  "plugins": [
+    {
+      "name": "multi-agent-memory",
+      "source": {
+        "source": "local",
+        "path": "./plugins/multi-agent-memory"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

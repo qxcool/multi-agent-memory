@@ -1,0 +1,78 @@
+# Multi-Agent Memory
+
+一个面向 Codex、Claude Code、Cursor 及其他编码代理的本地优先共享记忆插件。它用普通 Markdown 文件保存长期项目事实、任务进度、经验、Wiki 和代理交接信息，无需数据库、账号或云服务。
+
+## 特点
+
+- 多代理共享：同一任务下，每个代理维护独立状态文件。
+- 本地优先：默认阻止 `.ai-memory-hub` 被 Git 意外提交。
+- 可审阅：所有数据都是 UTF-8 Markdown，可直接阅读和修改。
+- 并发安全：跨平台写锁、同目录临时文件和原子替换。
+- 旧版兼容：支持原 `memory_hub.py` 的 `recall`、`status`、`remember`、`reindex` 和 `archive` 调用。
+- 零运行时依赖：仅需 Python 3.10 或更高版本。
+
+## 安装到 Codex
+
+```powershell
+codex plugin marketplace add qxcool/multi-agent-memory
+codex plugin add multi-agent-memory@multi-agent-memory
+```
+
+重新打开一个 Codex 任务后即可让代理初始化或检索共享记忆。
+
+## 直接使用命令行
+
+克隆仓库后，无需安装 Python 包：
+
+```powershell
+python plugins/multi-agent-memory/scripts/memory_hub.py --hub .ai-memory-hub init
+python plugins/multi-agent-memory/scripts/memory_hub.py --hub .ai-memory-hub status --task demo --agent codex --objective "演示共享状态" --state in-progress --completed "初始化完成" --next "继续实现" --blocker "无"
+python plugins/multi-agent-memory/scripts/memory_hub.py --hub .ai-memory-hub recall --query "演示"
+python plugins/multi-agent-memory/scripts/memory_hub.py --hub .ai-memory-hub doctor
+```
+
+也可以安装为全局命令：
+
+```powershell
+python -m pip install ./plugins/multi-agent-memory
+memory-hub --hub .ai-memory-hub doctor
+```
+
+## 数据结构
+
+```text
+.ai-memory-hub/
+├── memory/        核心长期记忆
+├── sessions/      活动任务状态
+├── experiences/   可复用经验
+├── wiki/          项目知识
+├── inbox/         候选记忆
+├── archive/       历史归档
+└── INDEX.md       总索引
+```
+
+完整命令和存储约束见插件内的[命令参考](plugins/multi-agent-memory/skills/multi-agent-memory/references/commands.md)与[存储格式](plugins/multi-agent-memory/skills/multi-agent-memory/references/storage.md)。
+
+## 从旧版迁移
+
+无需转换数据。先对原目录执行只读检查和检索：
+
+```powershell
+python plugins/multi-agent-memory/scripts/memory_hub.py --hub D:\path\to\.ai-memory-hub doctor
+python plugins/multi-agent-memory/scripts/memory_hub.py --hub D:\path\to\.ai-memory-hub recall --query "已知项目关键词"
+```
+
+确认结果后再运行 `reindex`。该命令只重建索引，不改写记忆正文。
+
+## 隐私与安全
+
+记忆中可能包含内部架构、客户信息或凭据线索。插件不会联网，也不会自动提交数据。不要把密钥写入记忆；只有在确认内容可公开时，才删除库内 `.gitignore` 或使用 `init --track`。
+
+## 开发
+
+```powershell
+python -m unittest discover -s plugins/multi-agent-memory/tests -v
+python C:\path\to\plugin-creator\scripts\validate_plugin.py plugins/multi-agent-memory
+```
+
+项目采用 MIT 许可证，欢迎提交问题与改进。
