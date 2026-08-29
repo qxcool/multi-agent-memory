@@ -8,6 +8,7 @@ from typing import Any, Sequence
 
 from .hub import (
     CONFIDENCE_LEVELS,
+    LIST_COLLECTIONS,
     MEMORY_TYPES,
     PROMOTE_TARGETS,
     RELATION_TYPES,
@@ -34,6 +35,13 @@ def _parse_link(value: str) -> tuple[str, str]:
         choices = "、".join(sorted(RELATION_TYPES))
         raise argparse.ArgumentTypeError(f"关系类型必须是：{choices}")
     return relation.strip(), target.strip()
+
+
+def _add_recall_filters(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--type", dest="memory_type", choices=sorted(MEMORY_TYPES | {"legacy"}))
+    parser.add_argument("--tag")
+    parser.add_argument("--confidence", choices=sorted(CONFIDENCE_LEVELS))
+    parser.add_argument("--collection")
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -78,18 +86,56 @@ def _parser() -> argparse.ArgumentParser:
     promote.add_argument("--id", dest="memory_id")
     promote.add_argument("--path")
 
+    forget = subparsers.add_parser("forget", help="将记忆移入 archive/forgotten（可逆）")
+    forget.add_argument("--id", dest="memory_id")
+    forget.add_argument("--path")
+
     recall = subparsers.add_parser("recall", help="全文检索记忆")
     recall.add_argument("--query", required=True)
     recall.add_argument("--limit", type=int, default=10)
     recall.add_argument("--min-score", type=int, default=1)
     recall.add_argument("--no-archive", action="store_true")
+    recall.add_argument("--include-forgotten", action="store_true")
+    _add_recall_filters(recall)
 
-    context = subparsers.add_parser("context", help="生成适合交给代理的紧凑上下文")
+    context = subparsers.add_parser("context", help="分层装配上下文（省 token）")
     context.add_argument("--query")
     context.add_argument("--max-chars", type=int, default=12000)
     context.add_argument("--token-budget", type=int)
     context.add_argument("--min-score", type=int, default=1)
     context.add_argument("--full", action="store_true", help="召回区块使用完整正文而非摘要")
+    context.add_argument(
+        "--core-budget",
+        type=int,
+        default=2000,
+        help="L0 核心记忆（CORE+LESSONS）字符上限，默认 2000",
+    )
+    context.add_argument("--include-user", action="store_true", help="将 USER.md 纳入 L0")
+    context.add_argument("--include-agents", action="store_true", help="将 AGENTS.md 纳入 L0")
+    _add_recall_filters(context)
+
+    distill = subparsers.add_parser("distill", help="任务收尾：沉淀回顾与教训")
+    distill.add_argument("--task", required=True)
+    distill.add_argument("--agent", required=True)
+    distill.add_argument("--lesson", help="一行短教训，写入 LESSONS.md")
+    distill.add_argument(
+        "--pin-core",
+        action="store_true",
+        help="同时在 CORE.md 追加一行指针（保持 CORE 精简）",
+    )
+    distill.add_argument(
+        "--no-promote-inbox",
+        action="store_true",
+        help="不自动把本任务 source_task 的 inbox 晋升到 experiences",
+    )
+
+    listing = subparsers.add_parser("list", help="列出集合内容供发现与交接")
+    listing.add_argument("collection", choices=sorted(LIST_COLLECTIONS))
+    listing.add_argument("--type", dest="memory_type", choices=sorted(MEMORY_TYPES | {"legacy"}))
+    listing.add_argument("--tag")
+    listing.add_argument("--limit", type=int, default=100)
+
+    subparsers.add_parser("overview", help="总览活动任务、inbox 与集合规模")
 
     archive = subparsers.add_parser("archive", help="归档一个活动任务")
     archive.add_argument("--task", required=True)
@@ -133,6 +179,33 @@ def _print_human(command: str, result: Any) -> None:
         return
     if command == "context":
         print(result)
+        return
+    if command == "list":
+        if not result:
+            print("（空）")
+            return
+        for item in result:
+            if "task" in item:
+                print(
+                    f"{item['task']}/{item['agent']}: {item.get('state', '')} — {item.get('objective', '')}"
+                )
+            else:
+                tags = ",".join(item.get("tags") or [])
+                print(
+                    f"{item.get('path')}: [{item.get('type')}] {item.get('title')}"
+                    + (f" #{tags}" if tags else "")
+                )
+        return
+    if command == "overview" and isinstance(result, dict):
+        print(f"hub: {result.get('hub')}")
+        print(f"counts: {result.get('counts')}")
+        print("active_tasks:")
+        for item in result.get("active_tasks") or []:
+            print(f"  - {item['task']}/{item['agent']}: {item.get('state')} — {item.get('objective')}")
+        print("recent_inbox:")
+        for item in result.get("recent_inbox") or []:
+            print(f"  - {item.get('path')}: {item.get('title')}")
+        print(result.get("hint", ""))
         return
     if isinstance(result, dict):
         for key, value in result.items():
@@ -179,12 +252,19 @@ def run(argv: Sequence[str] | None = None) -> int:
             )
         elif args.command == "promote":
             result = hub.promote(to=args.to, memory_id=args.memory_id, path=args.path)
+        elif args.command == "forget":
+            result = hub.forget(memory_id=args.memory_id, path=args.path)
         elif args.command == "recall":
             search_results = hub.recall(
                 args.query,
                 limit=args.limit,
                 include_archive=not args.no_archive,
+                include_forgotten=args.include_forgotten,
                 min_score=args.min_score,
+                memory_type=args.memory_type,
+                tag=args.tag,
+                confidence=args.confidence,
+                collection=args.collection,
             )
             result = search_results_as_dict(search_results) if args.json else search_results
         elif args.command == "context":
@@ -194,7 +274,31 @@ def run(argv: Sequence[str] | None = None) -> int:
                 token_budget=args.token_budget,
                 min_score=args.min_score,
                 full=args.full,
+                memory_type=args.memory_type,
+                tag=args.tag,
+                confidence=args.confidence,
+                collection=args.collection,
+                core_budget=args.core_budget,
+                include_user=args.include_user,
+                include_agents=args.include_agents,
             )
+        elif args.command == "distill":
+            result = hub.distill(
+                task=args.task,
+                agent=args.agent,
+                lesson=args.lesson,
+                promote_inbox=not args.no_promote_inbox,
+                pin_core=args.pin_core,
+            )
+        elif args.command == "list":
+            result = hub.list_entries(
+                args.collection,
+                memory_type=args.memory_type,
+                tag=args.tag,
+                limit=args.limit,
+            )
+        elif args.command == "overview":
+            result = hub.overview()
         elif args.command == "archive":
             result = hub.archive(args.task)
         elif args.command == "reindex":

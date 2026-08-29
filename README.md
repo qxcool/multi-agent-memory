@@ -1,8 +1,8 @@
 # Multi-Agent Memory
 
-面向任意编码代理（Cursor、Claude Code、Codex、OpenCode 等）的本地优先共享记忆。用普通 Markdown 保存长期项目事实、任务进度、经验、Wiki 和代理交接，无需数据库、账号或云服务。
+面向任意编码代理、任意操作系统（Windows / macOS / Linux）的本地优先共享记忆。每次任务留下过程与踩坑，核心记忆与经验分层装配以节省 token。
 
-核心交付是可移植的 **Agent Skill**（工作流）+ **无依赖 Python CLI**（读写）。宿主插件清单仅为可选安装适配。
+核心交付：**Agent Skill（自动开场/收尾节奏）** + **无依赖 Python CLI**。多脚本经写锁；`overview` / `INDEX.md` 让其他 AI 知道库里有什么。
 
 ## 特点
 
@@ -39,15 +39,17 @@ python plugins/multi-agent-memory/scripts/memory_hub.py doctor
 常用命令：
 
 ```bash
-memory-hub init
+memory-hub overview
+memory-hub list sessions
+memory-hub context --query "演示" --token-budget 2048 --core-budget 2000
 memory-hub status --task demo --agent cursor --objective "演示共享状态" --state in-progress \
   --append-completed --completed "初始化完成" --next "继续实现" --blocker "无"
-memory-hub status --task demo --agent cursor
-memory-hub recall --query "演示"
-memory-hub context --query "演示" --token-budget 2048 --full
-memory-hub promote --to experiences --id mem-xxxxxxxx
+memory-hub remember --agent cursor --source-task demo --type event --tags "pitfall,lesson" \
+  --text "现象 → 原因 → 做法 → 勿再犯"
+memory-hub distill --task demo --agent cursor --lesson "一行短教训"
 memory-hub stats
 ```
+
 ## 安装到 Codex（可选适配）
 
 ```powershell
@@ -61,13 +63,13 @@ codex plugin add multi-agent-memory@multi-agent-memory
 
 ```text
 .ai-memory-hub/
-├── memory/        核心长期记忆
-├── sessions/      活动任务状态
-├── experiences/   可复用经验
+├── memory/        CORE + LESSONS（短）/ USER / AGENTS
+├── sessions/      任务过程
+├── experiences/   完整踩坑与回顾（按需召回）
 ├── wiki/          项目知识
-├── inbox/         候选记忆
-├── archive/       历史归档
-└── INDEX.md       总索引
+├── inbox/         候选
+├── archive/       归档与 forgotten/
+└── INDEX.md       总索引 + 活动任务速览
 ```
 
 完整命令和存储约束见 [命令参考](plugins/multi-agent-memory/skills/multi-agent-memory/references/commands.md) 与 [存储格式](plugins/multi-agent-memory/skills/multi-agent-memory/references/storage.md)。

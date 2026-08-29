@@ -1,13 +1,7 @@
 # 架构说明
 
-分为三个稳定边界：**宿主 Skill** 决定何时读写共享记忆；**Python CLI** 负责参数校验、并发控制和输出；**`.ai-memory-hub`** 只保存普通 Markdown。代理框架与存储格式互不绑定——任意宿主可加载同一 Skill，也可只调 CLI 或只读 Markdown。
+跨 Win / macOS / Linux。三层边界：**Skill**（自动记忆节奏）→ **Python CLI**（锁/校验）→ **Markdown 库**。
 
-Skill 与 CLI 入口同包（`skills/multi-agent-memory/scripts/`）；Codex 等插件清单是可选适配层，不是记忆协议的一部分。省略 `--hub` 或使用默认名时，CLI 从当前目录向上查找 `.ai-memory-hub`。`status` 在无写字段时只读；`--append-completed` 追加完成项。`promote` 将 inbox 候选迁入 `experiences` / `wiki` / `memory`；`context --full` 装入召回正文。
+记忆分层：L0 `CORE`+`LESSONS`（短、`--core-budget`）→ L1 sessions 过程 → L2 experiences 按需召回 → L3 inbox。`context` 默认不灌 `USER`/`AGENTS`。`distill` 在任务收尾沉淀回顾、晋升 inbox、写入短教训。
 
-写路径统一经过库级排他锁。内容先写入目标目录的临时文件，刷新到磁盘后再原子替换，避免进程中断留下半个文件。锁文件包含进程号和创建时间，超过两分钟后允许恢复。每次受控写入都会重建轻量索引；正文文件不会在索引过程中被改写。
-
-新记忆使用兼容 YAML 的 JSON 标量前置元数据，正文仍是普通 Markdown。元数据保存稳定 ID、类型、来源、置信度、标签和显式关系；旧文件没有元数据时按 `legacy` 记录继续读取，任何检查或索引操作都不会为旧正文自动补写字段。
-
-全文检索是确定性的本地词项计分，综合标题、正文、路径和标签命中，并为结果附带分数、命中原因与来源。上下文装配先保留安全声明和核心记忆，再按分数加入完整召回区块；字符上限和近似 Token 预算同时存在时取更严格的限制。
-
-不使用远程嵌入模型，因此不会产生网络或模型费用。SQLite FTS5、Embedding、关系扩展和 MCP 均可在后续作为派生索引或适配层加入，但不得替代 Markdown 事实源，也不得改变默认不联网的边界。
+并发：写锁含 pid/host；`status` 锁内重读；`remember` 正文去重。可发现：`overview`/`list`/`INDEX` 活动任务速览。不联网、不用嵌入模型。

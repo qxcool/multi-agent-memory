@@ -1,76 +1,56 @@
 # 命令参考
 
-`HUB` 为 `memory-hub`，或本技能目录下的 `python scripts/memory_hub.py`。全局参数放在子命令前。
+跨 Win / macOS / Linux。`HUB` = `memory-hub` 或：
+
+```bash
+python scripts/memory_hub.py
+```
+
+全局参数在子命令前。省略 `--hub` 时向上查找 `.ai-memory-hub`。
+
+## 发现
 
 ```bash
 HUB doctor
-HUB --hub /path/to/.ai-memory-hub doctor
+HUB overview
+HUB list sessions
+HUB list inbox --tag pitfall
 ```
 
-- `--hub PATH`：省略或为 `.ai-memory-hub` 时，从当前目录向上查找；自定义相对/绝对路径按字面使用。
-- `--json`：机器可读 JSON。
-
-## 初始化
+## 分层上下文（省 token）
 
 ```bash
-HUB init
+HUB context --query "认证 刷新" --token-budget 2048 --core-budget 2000
+HUB context --query "认证" --full --include-user --include-agents
+HUB recall --query "勿再犯" --collection experiences --tag pitfall
 ```
 
-默认生成库内 `.gitignore`。只有用户明确要求用 Git 共享记忆时才使用 `init --track`。
+默认 L0 只含 `CORE.md` + `LESSONS.md`（受 `--core-budget`）。`USER` / `AGENTS` 需显式打开。无 `--collection` 时优先召回 `experiences/`。
 
-## 检索与上下文
+## 任务过程
 
 ```bash
-HUB recall --query "认证 刷新令牌" --limit 8
-HUB recall --query "认证" --min-score 10
-HUB context --query "认证" --token-budget 2048
-HUB context --query "认证" --full --token-budget 4096
+HUB status --task auth-refresh --agent cursor --objective "修刷新" --state in-progress
+HUB status --task auth-refresh --agent cursor --append-completed --completed "定位竞态"
+HUB remember --agent cursor --source-task auth-refresh --type event \
+  --tags "pitfall,lesson" --confidence confirmed \
+  --text "重复刷新会打爆接口；必须复用单例 Promise"
 ```
 
-`recall --no-archive` 排除归档；`--min-score` 过滤低分结果。`context --full` 装入召回文件的完整正文（仍受预算限制）。
-
-## 任务状态
-
-`--agent` 用当前宿主短名（如 `cursor`、`claude`、`codex`），同一项目内保持稳定。
-
-只读：
+## 收尾沉淀
 
 ```bash
-HUB status --task auth-refresh --agent cursor
-```
-
-写入（追加完成项）：
-
-```bash
-HUB status --task auth-refresh --agent cursor \
-  --objective "修复刷新令牌并发问题" --state in-progress \
-  --append-completed --completed "确认重复刷新根因" \
-  --next "补充并发测试" --blocker "无"
-```
-
-不加 `--append-completed` 时，`--completed` 会整表替换已完成列表。省略的其他字段保留原值。
-
-## 候选记忆、晋升、归档
-
-```bash
-HUB remember \
-  --agent cursor --text "刷新请求必须共用单例 Promise" \
-  --tags "auth,concurrency" --type decision \
-  --source-task auth-refresh --confidence confirmed \
-  --link "requires:mem-auth-client"
-HUB promote --to experiences --id mem-xxxxxxxx
-HUB promote --to wiki --path inbox/2026-08-29-....md
+HUB distill --task auth-refresh --agent cursor --lesson "刷新必须单例，禁止并行重入"
+HUB distill --task auth-refresh --agent cursor --lesson "…" --pin-core
 HUB archive --task auth-refresh
-HUB reindex
 ```
 
-`--link` 可重复，格式 `relation:target`。晋升目标：`experiences`、`wiki`、`memory`。只能从 `inbox/` 晋升。
+`distill` 会写 experiences 回顾，并晋升 `source_task` 匹配的 inbox（可用 `--no-promote-inbox` 关闭）。
 
-## 统计与健康检查
+## 其它
 
 ```bash
+HUB promote --to experiences --id mem-xxxxxxxx
+HUB forget --id mem-xxxxxxxx
 HUB stats
-HUB --json doctor
 ```
-
-`doctor` 将缺元数据、索引可能过期列为警告；目录缺失、编码错误、陈旧写锁为问题。

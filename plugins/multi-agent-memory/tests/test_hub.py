@@ -98,6 +98,70 @@ class MemoryHubTests(unittest.TestCase):
         self.assertIn("认证刷新必须复用同一个任务", full)
         self.assertGreaterEqual(len(full), len(summary))
 
+    def test_overview_and_list_expose_active_work(self) -> None:
+        self.hub.update_status(task="auth", agent="cursor", objective="修认证", state="in-progress")
+        self.hub.remember(agent="cursor", text="认证刷新采用单例任务", memory_type="decision", tags=["auth"])
+        overview = self.hub.overview()
+        self.assertEqual(1, overview["counts"]["sessions"])
+        self.assertEqual(1, len(overview["active_tasks"]))
+        self.assertIn("修认证", overview["active_tasks"][0]["objective"])
+        listed = self.hub.list_entries("inbox", memory_type="decision", tag="auth")
+        self.assertEqual(1, len(listed))
+        index = (self.root / "INDEX.md").read_text(encoding="utf-8")
+        self.assertIn("活动任务速览", index)
+        self.assertIn("修认证", index)
+
+    def test_remember_rejects_duplicate_content(self) -> None:
+        self.hub.remember(agent="cursor", text="同一条决策正文")
+        with self.assertRaises(MemoryHubError):
+            self.hub.remember(agent="claude", text="同一条决策正文")
+
+    def test_forget_moves_to_archive_forgotten(self) -> None:
+        remembered = self.hub.remember(agent="cursor", text="过时的临时结论", memory_type="note")
+        result = self.hub.forget(memory_id=str(remembered["id"]))
+        self.assertTrue(result["to"].startswith("archive/forgotten/"))
+        self.assertFalse(Path(remembered["path"]).exists())
+        self.assertEqual([], self.hub.recall("过时的临时结论"))
+        found = self.hub.recall("过时的临时结论", include_forgotten=True)
+        self.assertTrue(found)
+
+    def test_recall_filters_and_relation_boost(self) -> None:
+        first = self.hub.remember(
+            agent="cursor",
+            text="认证客户端约定",
+            memory_type="decision",
+            tags=["auth"],
+        )
+        self.hub.remember(
+            agent="cursor",
+            text="认证刷新请求必须复用单例",
+            memory_type="decision",
+            tags=["auth"],
+            links=[("requires", str(first["id"]))],
+        )
+        filtered = self.hub.recall("刷新", memory_type="decision", tag="auth")
+        self.assertTrue(filtered)
+        boosted = self.hub.recall("认证", memory_type="decision")
+        by_id = {item.memory_id: item for item in boosted}
+        self.assertIn(first["id"], by_id)
+        self.assertIn("关系链接加分", by_id[first["id"]].reason)
+
+    def test_dead_lock_owner_is_reclaimed(self) -> None:
+        lock = self.root / ".memory-hub.lock"
+        lock.write_text(
+            json.dumps({"pid": 999_999_999, "host": "same-host-will-check", "created": 1}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        # Force same-host reclaim path by rewriting host after import of helper behavior:
+        import socket
+
+        lock.write_text(
+            json.dumps({"pid": 999_999_999, "host": socket.gethostname(), "created": 1}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        self.hub.remember(agent="cursor", text="写锁回收后仍可写入")
+        self.assertFalse(lock.exists())
+
     def test_task_name_cannot_escape_hub(self) -> None:
         with self.assertRaises(MemoryHubError):
             self.hub.update_status(task="../outside", agent="codex")
@@ -180,6 +244,46 @@ class MemoryHubTests(unittest.TestCase):
 
         self.assertIn("# Core Memory", context)
         self.assertLessEqual(len(context), 300)
+
+    def test_context_tiers_skip_user_by_default(self) -> None:
+        (self.root / "memory" / "USER.md").write_text("# User Memory\n\n秘密偏好不应默认加载\n", encoding="utf-8")
+        context = self.hub.context(query=None, max_chars=8000)
+        self.assertIn("L0 核心记忆", context)
+        self.assertNotIn("秘密偏好不应默认加载", context)
+        with_user = self.hub.context(include_user=True, max_chars=8000)
+        self.assertIn("秘密偏好不应默认加载", with_user)
+
+    def test_distill_writes_retrospective_promotes_inbox_and_lessons(self) -> None:
+        self.hub.update_status(
+            task="auth",
+            agent="cursor",
+            objective="修刷新",
+            state="completed",
+            completed=["定位竞态"],
+            blocker="无",
+        )
+        remembered = self.hub.remember(
+            agent="cursor",
+            text="刷新必须单例否则打爆接口",
+            memory_type="event",
+            source_task="auth",
+            tags=["pitfall", "lesson"],
+            confidence="confirmed",
+        )
+        result = self.hub.distill(
+            task="auth",
+            agent="cursor",
+            lesson="刷新必须单例，禁止并行重入",
+            pin_core=True,
+        )
+        self.assertTrue(str(result["retrospective"]).startswith("experiences/"))
+        self.assertTrue(any(path.startswith("experiences/") for path in result["promoted"]))
+        self.assertFalse(Path(remembered["path"]).exists())
+        lessons = (self.root / "memory" / "LESSONS.md").read_text(encoding="utf-8")
+        self.assertIn("刷新必须单例，禁止并行重入", lessons)
+        core = (self.root / "memory" / "CORE.md").read_text(encoding="utf-8")
+        self.assertIn("## Distilled", core)
+        self.assertIn("`auth`", core)
 
     def test_stats_reports_metadata_coverage_types_and_relations(self) -> None:
         self.hub.remember(

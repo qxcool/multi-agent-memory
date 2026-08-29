@@ -1,7 +1,7 @@
 {
   "name": "multi-agent-memory",
-  "version": "0.2.2",
-  "description": "宿主无关的本地优先 Markdown 共享记忆库：可追溯元数据、可解释召回与预算控制",
+  "version": "0.4.0",
+  "description": "跨平台自动任务记忆：分层上下文、踩坑沉淀与并发安全 Markdown 库",
   "author": {
     "name": "qxcool",
     "url": "https://github.com/qxcool"
