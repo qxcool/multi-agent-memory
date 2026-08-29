@@ -15,6 +15,8 @@ from typing import Iterator, Sequence
 
 
 COLLECTIONS = ("memory", "sessions", "experiences", "wiki", "inbox", "archive")
+HUB_DIRNAME = ".ai-memory-hub"
+PROMOTE_TARGETS = {"memory", "experiences", "wiki"}
 MEMORY_TYPES = {"note", "fact", "decision", "event", "skill", "task", "preference"}
 CONFIDENCE_LEVELS = {"unspecified", "tentative", "inferred", "confirmed"}
 RELATION_TYPES = {"related_to", "requires", "solved_by", "uses", "patches", "conflicts_with"}
@@ -26,6 +28,27 @@ STATUS_FIELDS = {
     "阻塞": "blocker",
     "下一步": "next_step",
 }
+
+
+def resolve_hub(explicit: str | Path | None = None, *, start: Path | None = None) -> Path:
+    """解析记忆库路径：显式路径优先；默认名则从 start 向上查找。"""
+    start = (start or Path.cwd()).resolve()
+    if explicit is not None:
+        path = Path(explicit).expanduser()
+        if path.is_absolute():
+            return path.resolve()
+        normalized = path.as_posix().removeprefix("./")
+        if normalized != HUB_DIRNAME:
+            return (start / path).resolve()
+    current = start
+    while True:
+        candidate = current / HUB_DIRNAME
+        if candidate.is_dir():
+            return candidate.resolve()
+        if current.parent == current:
+            break
+        current = current.parent
+    return (start / HUB_DIRNAME).resolve()
 
 
 class MemoryHubError(RuntimeError):
@@ -199,6 +222,16 @@ class MemoryHub:
             self._reindex_unlocked()
         return {"hub": str(self.root), "created": created, "tracked": track}
 
+    def get_status(self, *, task: str, agent: str) -> dict[str, object]:
+        self._ensure_initialized()
+        task = _safe_segment(task, "任务名")
+        agent = _safe_segment(agent, "代理名")
+        path = self.root / "sessions" / task / f"{agent}.md"
+        if not path.is_file():
+            raise MemoryHubError(f"任务状态不存在：{task}/{agent}")
+        parsed = self._parse_status(path)
+        return {"task": task, "agent": agent, "path": str(path), **parsed}
+
     def update_status(
         self,
         *,
@@ -210,16 +243,30 @@ class MemoryHub:
         next_step: str | None = None,
         blocker: str | None = None,
         steps: str | None = None,
+        append_completed: bool = False,
     ) -> dict[str, object]:
         self._ensure_initialized()
         task = _safe_segment(task, "任务名")
         agent = _safe_segment(agent, "代理名")
         path = self.root / "sessions" / task / f"{agent}.md"
         previous = self._parse_status(path) if path.exists() else {}
+        previous_completed = list(previous.get("completed", []) or [])
+        if completed:
+            incoming = [_one_line(str(item)) for item in completed if str(item).strip()]
+            if append_completed:
+                merged = list(previous_completed)
+                for item in incoming:
+                    if item not in merged:
+                        merged.append(item)
+                completed_values: list[str] = merged
+            else:
+                completed_values = incoming
+        else:
+            completed_values = previous_completed
         values: dict[str, object] = {
             "objective": objective if objective is not None else previous.get("objective", ""),
             "steps": steps if steps is not None else previous.get("steps", ""),
-            "completed": list(completed) if completed else previous.get("completed", []),
+            "completed": completed_values,
             "state": state if state is not None else previous.get("state", "in-progress"),
             "blocker": blocker if blocker is not None else previous.get("blocker", "无"),
             "next_step": next_step if next_step is not None else previous.get("next_step", ""),
@@ -252,6 +299,68 @@ class MemoryHub:
             value = match.group(2).strip()
             parsed[key] = [item for item in value.split("；") if item] if key == "completed" else value
         return parsed
+
+    def _resolve_inbox_source(self, *, memory_id: str | None = None, path: str | None = None) -> Path:
+        if bool(memory_id) == bool(path):
+            raise MemoryHubError("晋升时必须且只能指定 --id 或 --path 之一")
+        if path:
+            relative = Path(path.replace("\\", "/"))
+            if relative.is_absolute() or ".." in relative.parts or relative.parts[:1] != ("inbox",):
+                raise MemoryHubError("晋升路径必须是相对 inbox/ 下的文件")
+            source = (self.root / relative).resolve()
+            try:
+                source.relative_to(self.root / "inbox")
+            except ValueError as error:
+                raise MemoryHubError("晋升路径必须位于 inbox/") from error
+            if not source.is_file() or source.name == "INDEX.md":
+                raise MemoryHubError(f"inbox 文件不存在：{relative.as_posix()}")
+            return source
+        assert memory_id is not None
+        memory_id = memory_id.strip()
+        if not memory_id:
+            raise MemoryHubError("记忆 ID 不能为空")
+        for candidate in (self.root / "inbox").glob("*.md"):
+            if candidate.name == "INDEX.md":
+                continue
+            try:
+                metadata, _ = _split_frontmatter(candidate.read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError):
+                continue
+            if metadata.get("id") == memory_id:
+                return candidate
+        raise MemoryHubError(f"inbox 中未找到记忆：{memory_id}")
+
+    def promote(
+        self,
+        *,
+        to: str,
+        memory_id: str | None = None,
+        path: str | None = None,
+    ) -> dict[str, object]:
+        self._ensure_initialized()
+        target = _choice(to, PROMOTE_TARGETS, "晋升目标")
+        source = self._resolve_inbox_source(memory_id=memory_id, path=path)
+        if source.name.casefold() in {"core.md", "user.md", "agents.md"}:
+            raise MemoryHubError("不能晋升为 CORE/USER/AGENTS 核心文件名")
+        destination_dir = self.root / target
+        destination = destination_dir / source.name
+        try:
+            metadata, _ = _split_frontmatter(source.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError) as error:
+            raise MemoryHubError(f"无法读取待晋升文件：{error}") from error
+        resolved_id = metadata.get("id") if isinstance(metadata.get("id"), str) else memory_id
+        with self._write_lock():
+            if destination.exists():
+                raise MemoryHubError(f"目标已存在：{target}/{source.name}")
+            destination_dir.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(source), str(destination))
+            self._reindex_unlocked()
+        return {
+            "id": resolved_id,
+            "from": f"inbox/{source.name}",
+            "to": f"{target}/{source.name}",
+            "collection": target,
+        }
 
     def remember(
         self,
@@ -410,6 +519,7 @@ class MemoryHub:
         max_chars: int = 12000,
         token_budget: int | None = None,
         min_score: int = 1,
+        full: bool = False,
     ) -> str:
         self._ensure_initialized()
         if max_chars < 1:
@@ -433,6 +543,14 @@ class MemoryHub:
                     for value in (result.source_task, result.source_agent, result.created_at)
                     if value
                 ) or "旧版文件，未提供结构化来源"
+                body = result.snippet
+                if full:
+                    file_path = self.root / result.path
+                    try:
+                        _, file_body = _split_frontmatter(file_path.read_text(encoding="utf-8"))
+                        body = file_body.strip() or result.snippet
+                    except (OSError, UnicodeDecodeError):
+                        body = result.snippet
                 sections.append(
                     (
                         f"## 召回记忆：{result.path}\n\n"
@@ -440,7 +558,7 @@ class MemoryHub:
                         f"- 原因：{result.reason}\n"
                         f"- 类型：{result.memory_type or 'legacy'}\n"
                         f"- 来源：{provenance}\n\n"
-                        f"{result.snippet}",
+                        f"{body}",
                         False,
                     )
                 )

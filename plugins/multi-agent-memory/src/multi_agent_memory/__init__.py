@@ -1,6 +1,6 @@
 """面向多代理协作的本地记忆库。"""
 
-from .hub import MemoryHub
+from .hub import MemoryHub, resolve_hub
 
-__all__ = ["MemoryHub"]
-__version__ = "0.2.1"
+__all__ = ["MemoryHub", "resolve_hub"]
+__version__ = "0.2.2"

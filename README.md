@@ -18,40 +18,36 @@
 
 ## 作为通用 Skill 使用
 
-将目录 `plugins/multi-agent-memory/skills/multi-agent-memory` 安装到你的代理 Skill 目录（或按所用工具的 Skill 安装方式注册）。代理按 `SKILL.md` 选择 Bootstrap / Load / Handoff / Remember / Close 分支，并通过本包内脚本调用 CLI。
+1. 安装 CLI 包（Skill 脚本也依赖该包，或需能从仓库解析到 `src/`）：
+
+```bash
+python -m pip install ./plugins/multi-agent-memory
+```
+
+2. 将目录 `plugins/multi-agent-memory/skills/multi-agent-memory` 安装到你的代理 Skill 目录。
+
+代理按 `SKILL.md` 选择 Bootstrap / Load / Handoff / Remember / Curate / Close。省略 `--hub` 时会从当前目录向上查找 `.ai-memory-hub`。
 
 CLI 入口（任选其一）：
 
 ```bash
-# 已 pip 安装时
-memory-hub --hub .ai-memory-hub doctor
-
-# Skill 旁脚本（推荐在未安装包时使用）
-python plugins/multi-agent-memory/skills/multi-agent-memory/scripts/memory_hub.py --hub .ai-memory-hub doctor
-
-# 兼容旧路径
-python plugins/multi-agent-memory/scripts/memory_hub.py --hub .ai-memory-hub doctor
+memory-hub doctor
+python plugins/multi-agent-memory/skills/multi-agent-memory/scripts/memory_hub.py doctor
+python plugins/multi-agent-memory/scripts/memory_hub.py doctor
 ```
 
 常用命令：
 
 ```bash
-python plugins/multi-agent-memory/skills/multi-agent-memory/scripts/memory_hub.py --hub .ai-memory-hub init
-python plugins/multi-agent-memory/skills/multi-agent-memory/scripts/memory_hub.py --hub .ai-memory-hub status \
-  --task demo --agent cursor --objective "演示共享状态" --state in-progress \
-  --completed "初始化完成" --next "继续实现" --blocker "无"
-python plugins/multi-agent-memory/skills/multi-agent-memory/scripts/memory_hub.py --hub .ai-memory-hub recall --query "演示"
-python plugins/multi-agent-memory/skills/multi-agent-memory/scripts/memory_hub.py --hub .ai-memory-hub context --query "演示" --token-budget 2048
-python plugins/multi-agent-memory/skills/multi-agent-memory/scripts/memory_hub.py --hub .ai-memory-hub stats
+memory-hub init
+memory-hub status --task demo --agent cursor --objective "演示共享状态" --state in-progress \
+  --append-completed --completed "初始化完成" --next "继续实现" --blocker "无"
+memory-hub status --task demo --agent cursor
+memory-hub recall --query "演示"
+memory-hub context --query "演示" --token-budget 2048 --full
+memory-hub promote --to experiences --id mem-xxxxxxxx
+memory-hub stats
 ```
-
-安装为全局命令：
-
-```bash
-python -m pip install ./plugins/multi-agent-memory
-memory-hub --hub .ai-memory-hub doctor
-```
-
 ## 安装到 Codex（可选适配）
 
 ```powershell

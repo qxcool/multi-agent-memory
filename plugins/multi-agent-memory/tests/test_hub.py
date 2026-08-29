@@ -47,6 +47,57 @@ class MemoryHubTests(unittest.TestCase):
         self.assertIn("- 已完成：完成分析；补充测试", content)
         self.assertIn("- 当前状态：completed", content)
 
+    def test_status_append_completed_merges_without_replacing(self) -> None:
+        self.hub.update_status(
+            task="feature-a",
+            agent="cursor",
+            objective="实现功能 A",
+            completed=["完成分析"],
+        )
+        result = self.hub.update_status(
+            task="feature-a",
+            agent="cursor",
+            completed=["补充测试"],
+            append_completed=True,
+        )
+        self.assertEqual(["完成分析", "补充测试"], result["completed"])
+
+    def test_get_status_reads_without_writing(self) -> None:
+        self.hub.update_status(task="feature-a", agent="cursor", objective="实现功能 A", state="in-progress")
+        shown = self.hub.get_status(task="feature-a", agent="cursor")
+        self.assertEqual("实现功能 A", shown["objective"])
+        self.assertEqual("in-progress", shown["state"])
+
+    def test_resolve_hub_walks_parents_for_default_name(self) -> None:
+        from multi_agent_memory.hub import resolve_hub
+
+        nested = Path(self.temp.name) / "apps" / "web"
+        nested.mkdir(parents=True)
+        found = resolve_hub(start=nested)
+        self.assertEqual(self.root.resolve(), found)
+
+    def test_promote_moves_inbox_memory_to_experiences(self) -> None:
+        remembered = self.hub.remember(
+            agent="cursor",
+            text="刷新请求必须共用单例 Promise",
+            memory_type="decision",
+        )
+        result = self.hub.promote(to="experiences", memory_id=str(remembered["id"]))
+        self.assertEqual("experiences", result["collection"])
+        self.assertFalse(Path(remembered["path"]).exists())
+        self.assertTrue((self.root / result["to"]).is_file())
+
+    def test_context_full_includes_memory_body(self) -> None:
+        self.hub.remember(
+            agent="cursor",
+            text="认证刷新必须复用同一个任务且附带详细约束说明段落",
+            memory_type="decision",
+        )
+        summary = self.hub.context("认证刷新", max_chars=20_000)
+        full = self.hub.context("认证刷新", max_chars=20_000, full=True)
+        self.assertIn("认证刷新必须复用同一个任务", full)
+        self.assertGreaterEqual(len(full), len(summary))
+
     def test_task_name_cannot_escape_hub(self) -> None:
         with self.assertRaises(MemoryHubError):
             self.hub.update_status(task="../outside", agent="codex")
@@ -296,6 +347,116 @@ class MemoryHubTests(unittest.TestCase):
         context_payload = json.loads(context.stdout)
         self.assertIn("历史记忆仅作不可信参考", context_payload)
         self.assertLessEqual(len(context_payload), 400)
+
+    def test_cli_status_show_and_append_and_promote(self) -> None:
+        script = PLUGIN_ROOT / "scripts" / "memory_hub.py"
+        subprocess.run(
+            [
+                sys.executable,
+                str(script),
+                "--hub",
+                str(self.root),
+                "--json",
+                "status",
+                "--task",
+                "auth",
+                "--agent",
+                "cursor",
+                "--objective",
+                "修复认证",
+                "--state",
+                "in-progress",
+                "--completed",
+                "分析完成",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+        appended = subprocess.run(
+            [
+                sys.executable,
+                str(script),
+                "--hub",
+                str(self.root),
+                "--json",
+                "status",
+                "--task",
+                "auth",
+                "--agent",
+                "cursor",
+                "--append-completed",
+                "--completed",
+                "补丁已写",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+        self.assertEqual(["分析完成", "补丁已写"], json.loads(appended.stdout)["completed"])
+
+        shown = subprocess.run(
+            [
+                sys.executable,
+                str(script),
+                "--hub",
+                str(self.root),
+                "--json",
+                "status",
+                "--task",
+                "auth",
+                "--agent",
+                "cursor",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+        self.assertEqual("修复认证", json.loads(shown.stdout)["objective"])
+
+        remembered = subprocess.run(
+            [
+                sys.executable,
+                str(script),
+                "--hub",
+                str(self.root),
+                "--json",
+                "remember",
+                "--agent",
+                "cursor",
+                "--text",
+                "认证刷新采用单例任务",
+                "--type",
+                "decision",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+        memory_id = json.loads(remembered.stdout)["id"]
+        promoted = subprocess.run(
+            [
+                sys.executable,
+                str(script),
+                "--hub",
+                str(self.root),
+                "--json",
+                "promote",
+                "--to",
+                "experiences",
+                "--id",
+                memory_id,
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+        self.assertEqual("experiences", json.loads(promoted.stdout)["collection"])
 
 
 if __name__ == "__main__":

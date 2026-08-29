@@ -2,7 +2,7 @@
 
 分为三个稳定边界：**宿主 Skill** 决定何时读写共享记忆；**Python CLI** 负责参数校验、并发控制和输出；**`.ai-memory-hub`** 只保存普通 Markdown。代理框架与存储格式互不绑定——任意宿主可加载同一 Skill，也可只调 CLI 或只读 Markdown。
 
-Skill 与 CLI 入口同包（`skills/multi-agent-memory/scripts/`）；Codex 等插件清单是可选适配层，不是记忆协议的一部分。
+Skill 与 CLI 入口同包（`skills/multi-agent-memory/scripts/`）；Codex 等插件清单是可选适配层，不是记忆协议的一部分。省略 `--hub` 或使用默认名时，CLI 从当前目录向上查找 `.ai-memory-hub`。`status` 在无写字段时只读；`--append-completed` 追加完成项。`promote` 将 inbox 候选迁入 `experiences` / `wiki` / `memory`；`context --full` 装入召回正文。
 
 写路径统一经过库级排他锁。内容先写入目标目录的临时文件，刷新到磁盘后再原子替换，避免进程中断留下半个文件。锁文件包含进程号和创建时间，超过两分钟后允许恢复。每次受控写入都会重建轻量索引；正文文件不会在索引过程中被改写。
 

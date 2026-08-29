@@ -9,9 +9,11 @@ from typing import Any, Sequence
 from .hub import (
     CONFIDENCE_LEVELS,
     MEMORY_TYPES,
+    PROMOTE_TARGETS,
     RELATION_TYPES,
     MemoryHub,
     MemoryHubError,
+    resolve_hub,
     search_results_as_dict,
 )
 
@@ -36,19 +38,28 @@ def _parse_link(value: str) -> tuple[str, str]:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="memory-hub", description="宿主无关的多代理本地 Markdown 记忆库")
-    parser.add_argument("--hub", default=".ai-memory-hub", help="记忆库目录，默认 .ai-memory-hub")
+    parser.add_argument(
+        "--hub",
+        default=None,
+        help="记忆库目录；省略或为 .ai-memory-hub 时从当前目录向上查找",
+    )
     parser.add_argument("--json", action="store_true", help="输出机器可读 JSON")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     init = subparsers.add_parser("init", help="初始化记忆库")
     init.add_argument("--track", action="store_true", help="允许 Git 跟踪记忆内容")
 
-    status = subparsers.add_parser("status", help="创建或更新代理任务状态")
+    status = subparsers.add_parser("status", help="读取或更新代理任务状态")
     status.add_argument("--task", required=True)
     status.add_argument("--agent", required=True)
     status.add_argument("--objective")
     status.add_argument("--state")
     status.add_argument("--completed", action="append", default=[])
+    status.add_argument(
+        "--append-completed",
+        action="store_true",
+        help="将 --completed 追加到已有完成项（去重），而不是整表替换",
+    )
     status.add_argument("--next", dest="next_step")
     status.add_argument("--blocker")
     status.add_argument("--steps")
@@ -62,6 +73,11 @@ def _parser() -> argparse.ArgumentParser:
     remember.add_argument("--confidence", choices=sorted(CONFIDENCE_LEVELS), default="unspecified")
     remember.add_argument("--link", action="append", type=_parse_link, default=[])
 
+    promote = subparsers.add_parser("promote", help="把 inbox 候选记忆晋升到长期集合")
+    promote.add_argument("--to", required=True, choices=sorted(PROMOTE_TARGETS))
+    promote.add_argument("--id", dest="memory_id")
+    promote.add_argument("--path")
+
     recall = subparsers.add_parser("recall", help="全文检索记忆")
     recall.add_argument("--query", required=True)
     recall.add_argument("--limit", type=int, default=10)
@@ -73,6 +89,7 @@ def _parser() -> argparse.ArgumentParser:
     context.add_argument("--max-chars", type=int, default=12000)
     context.add_argument("--token-budget", type=int)
     context.add_argument("--min-score", type=int, default=1)
+    context.add_argument("--full", action="store_true", help="召回区块使用完整正文而非摘要")
 
     archive = subparsers.add_parser("archive", help="归档一个活动任务")
     archive.add_argument("--task", required=True)
@@ -81,6 +98,20 @@ def _parser() -> argparse.ArgumentParser:
     subparsers.add_parser("stats", help="查看记录、类型、关系和元数据覆盖率")
     subparsers.add_parser("doctor", help="只读检查结构、编码和写锁")
     return parser
+
+
+def _status_is_read_only(args: argparse.Namespace) -> bool:
+    return not any(
+        [
+            args.objective is not None,
+            args.state is not None,
+            bool(args.completed),
+            args.append_completed,
+            args.next_step is not None,
+            args.blocker is not None,
+            args.steps is not None,
+        ]
+    )
 
 
 def _print_human(command: str, result: Any) -> None:
@@ -116,21 +147,25 @@ def run(argv: Sequence[str] | None = None) -> int:
     _configure_stdio()
     parser = _parser()
     args = parser.parse_args(argv)
-    hub = MemoryHub(Path(args.hub))
+    hub = MemoryHub(resolve_hub(args.hub))
     try:
         if args.command == "init":
             result = hub.init(track=args.track)
         elif args.command == "status":
-            result = hub.update_status(
-                task=args.task,
-                agent=args.agent,
-                objective=args.objective,
-                state=args.state,
-                completed=args.completed,
-                next_step=args.next_step,
-                blocker=args.blocker,
-                steps=args.steps,
-            )
+            if _status_is_read_only(args):
+                result = hub.get_status(task=args.task, agent=args.agent)
+            else:
+                result = hub.update_status(
+                    task=args.task,
+                    agent=args.agent,
+                    objective=args.objective,
+                    state=args.state,
+                    completed=args.completed,
+                    next_step=args.next_step,
+                    blocker=args.blocker,
+                    steps=args.steps,
+                    append_completed=args.append_completed,
+                )
         elif args.command == "remember":
             tags = [tag.strip() for tag in args.tags.split(",") if tag.strip()]
             result = hub.remember(
@@ -142,6 +177,8 @@ def run(argv: Sequence[str] | None = None) -> int:
                 confidence=args.confidence,
                 links=args.link,
             )
+        elif args.command == "promote":
+            result = hub.promote(to=args.to, memory_id=args.memory_id, path=args.path)
         elif args.command == "recall":
             search_results = hub.recall(
                 args.query,
@@ -156,6 +193,7 @@ def run(argv: Sequence[str] | None = None) -> int:
                 max_chars=args.max_chars,
                 token_budget=args.token_budget,
                 min_score=args.min_score,
+                full=args.full,
             )
         elif args.command == "archive":
             result = hub.archive(args.task)
