@@ -2,9 +2,9 @@
 
 **目标：** 重建可公开安装、兼容旧数据并支持多代理安全并发的共享记忆插件。
 
-**架构：** Codex Skill 负责工作流选择，Python 标准库实现确定性 CLI，Markdown 文件作为可审阅的唯一事实来源。仓库同时提供 Codex 市场清单与独立 Python 包。
+**架构：** 宿主无关 Skill 负责工作流选择，Python 标准库实现确定性 CLI，Markdown 文件作为可审阅的唯一事实来源。仓库提供通用 Skill、可选 Codex 市场清单与独立 Python 包。
 
-**技术栈：** Python 3.10+、`unittest`、Codex Plugin/Skill、GitHub Actions。
+**技术栈：** Python 3.10+、`unittest`、Agent Skill、可选 Codex Plugin、GitHub Actions。
 
 ## 任务一：兼容存储内核
 

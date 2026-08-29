@@ -13,7 +13,7 @@
 └── INDEX.md       总索引
 ```
 
-任务文件沿用旧版字段：`目标`、`步骤`、`已完成`、`当前状态`、`阻塞`、`下一步`。插件可以读取旧版手工 Markdown；不会自动改写正文。只有 `status`、`remember`、`reindex` 和 `archive` 会写入。
+任务文件沿用旧版字段：`目标`、`步骤`、`已完成`、`当前状态`、`阻塞`、`下一步`。可读旧版手工 Markdown，不会自动改写正文。只有 `status`、`remember`、`reindex` 和 `archive` 会写入。
 
 ## 结构化记忆元数据
 
@@ -24,7 +24,7 @@
 id: "mem-c41e3c44e7b94e8fbc9c2fc5c366e9ff"
 type: "decision"
 source_task: "auth-refresh"
-source_agent: "codex"
+source_agent: "cursor"
 created_at: "2026-08-29T16:30:00+08:00"
 confidence: "confirmed"
 tags: ["auth", "concurrency"]

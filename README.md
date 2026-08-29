@@ -1,6 +1,8 @@
 # Multi-Agent Memory
 
-一个面向 Codex、Claude Code、Cursor 及其他编码代理的本地优先共享记忆插件。它用普通 Markdown 文件保存长期项目事实、任务进度、经验、Wiki 和代理交接信息，无需数据库、账号或云服务。
+面向任意编码代理（Cursor、Claude Code、Codex、OpenCode 等）的本地优先共享记忆。用普通 Markdown 保存长期项目事实、任务进度、经验、Wiki 和代理交接，无需数据库、账号或云服务。
+
+核心交付是可移植的 **Agent Skill**（工作流）+ **无依赖 Python CLI**（读写）。宿主插件清单仅为可选安装适配。
 
 ## 特点
 
@@ -14,34 +16,50 @@
 - 旧版兼容：支持原 `memory_hub.py` 的 `recall`、`status`、`remember`、`reindex` 和 `archive` 调用。
 - 零运行时依赖：仅需 Python 3.10 或更高版本。
 
-## 安装到 Codex
+## 作为通用 Skill 使用
+
+将目录 `plugins/multi-agent-memory/skills/multi-agent-memory` 安装到你的代理 Skill 目录（或按所用工具的 Skill 安装方式注册）。代理按 `SKILL.md` 选择 Bootstrap / Load / Handoff / Remember / Close 分支，并通过本包内脚本调用 CLI。
+
+CLI 入口（任选其一）：
+
+```bash
+# 已 pip 安装时
+memory-hub --hub .ai-memory-hub doctor
+
+# Skill 旁脚本（推荐在未安装包时使用）
+python plugins/multi-agent-memory/skills/multi-agent-memory/scripts/memory_hub.py --hub .ai-memory-hub doctor
+
+# 兼容旧路径
+python plugins/multi-agent-memory/scripts/memory_hub.py --hub .ai-memory-hub doctor
+```
+
+常用命令：
+
+```bash
+python plugins/multi-agent-memory/skills/multi-agent-memory/scripts/memory_hub.py --hub .ai-memory-hub init
+python plugins/multi-agent-memory/skills/multi-agent-memory/scripts/memory_hub.py --hub .ai-memory-hub status \
+  --task demo --agent cursor --objective "演示共享状态" --state in-progress \
+  --completed "初始化完成" --next "继续实现" --blocker "无"
+python plugins/multi-agent-memory/skills/multi-agent-memory/scripts/memory_hub.py --hub .ai-memory-hub recall --query "演示"
+python plugins/multi-agent-memory/skills/multi-agent-memory/scripts/memory_hub.py --hub .ai-memory-hub context --query "演示" --token-budget 2048
+python plugins/multi-agent-memory/skills/multi-agent-memory/scripts/memory_hub.py --hub .ai-memory-hub stats
+```
+
+安装为全局命令：
+
+```bash
+python -m pip install ./plugins/multi-agent-memory
+memory-hub --hub .ai-memory-hub doctor
+```
+
+## 安装到 Codex（可选适配）
 
 ```powershell
 codex plugin marketplace add qxcool/multi-agent-memory
 codex plugin add multi-agent-memory@multi-agent-memory
 ```
 
-重新打开一个 Codex 任务后即可让代理初始化或检索共享记忆。
-
-## 直接使用命令行
-
-克隆仓库后，无需安装 Python 包：
-
-```powershell
-python plugins/multi-agent-memory/scripts/memory_hub.py --hub .ai-memory-hub init
-python plugins/multi-agent-memory/scripts/memory_hub.py --hub .ai-memory-hub status --task demo --agent codex --objective "演示共享状态" --state in-progress --completed "初始化完成" --next "继续实现" --blocker "无"
-python plugins/multi-agent-memory/scripts/memory_hub.py --hub .ai-memory-hub recall --query "演示"
-python plugins/multi-agent-memory/scripts/memory_hub.py --hub .ai-memory-hub context --query "演示" --token-budget 2048
-python plugins/multi-agent-memory/scripts/memory_hub.py --hub .ai-memory-hub stats
-python plugins/multi-agent-memory/scripts/memory_hub.py --hub .ai-memory-hub doctor
-```
-
-也可以安装为全局命令：
-
-```powershell
-python -m pip install ./plugins/multi-agent-memory
-memory-hub --hub .ai-memory-hub doctor
-```
+重新打开任务后即可让代理初始化或检索共享记忆。行为与通用 Skill 相同。
 
 ## 数据结构
 
@@ -56,14 +74,14 @@ memory-hub --hub .ai-memory-hub doctor
 └── INDEX.md       总索引
 ```
 
-完整命令和存储约束见插件内的[命令参考](plugins/multi-agent-memory/skills/multi-agent-memory/references/commands.md)与[存储格式](plugins/multi-agent-memory/skills/multi-agent-memory/references/storage.md)。
+完整命令和存储约束见 [命令参考](plugins/multi-agent-memory/skills/multi-agent-memory/references/commands.md) 与 [存储格式](plugins/multi-agent-memory/skills/multi-agent-memory/references/storage.md)。
 
 新建记忆可声明结构化语义，同时仍保存为普通 Markdown：
 
-```powershell
-python plugins/multi-agent-memory/scripts/memory_hub.py --hub .ai-memory-hub remember `
-  --agent codex --text "刷新请求必须复用同一个任务" `
-  --type decision --source-task auth-refresh --confidence confirmed `
+```bash
+python plugins/multi-agent-memory/skills/multi-agent-memory/scripts/memory_hub.py --hub .ai-memory-hub remember \
+  --agent cursor --text "刷新请求必须复用同一个任务" \
+  --type decision --source-task auth-refresh --confidence confirmed \
   --tags "auth,concurrency" --link "requires:mem-auth-client"
 ```
 
@@ -71,9 +89,9 @@ python plugins/multi-agent-memory/scripts/memory_hub.py --hub .ai-memory-hub rem
 
 无需转换数据。先对原目录执行只读检查和检索：
 
-```powershell
-python plugins/multi-agent-memory/scripts/memory_hub.py --hub D:\path\to\.ai-memory-hub doctor
-python plugins/multi-agent-memory/scripts/memory_hub.py --hub D:\path\to\.ai-memory-hub recall --query "已知项目关键词"
+```bash
+python plugins/multi-agent-memory/skills/multi-agent-memory/scripts/memory_hub.py --hub /path/to/.ai-memory-hub doctor
+python plugins/multi-agent-memory/skills/multi-agent-memory/scripts/memory_hub.py --hub /path/to/.ai-memory-hub recall --query "已知项目关键词"
 ```
 
 确认结果后再运行 `reindex`。该命令只重建索引，不改写记忆正文。
@@ -84,9 +102,8 @@ python plugins/multi-agent-memory/scripts/memory_hub.py --hub D:\path\to\.ai-mem
 
 ## 开发
 
-```powershell
+```bash
 python -m unittest discover -s plugins/multi-agent-memory/tests -v
-python C:\path\to\plugin-creator\scripts\validate_plugin.py plugins/multi-agent-memory
 ```
 
 项目采用 MIT 许可证，欢迎提交问题与改进。

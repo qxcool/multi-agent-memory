@@ -1,69 +1,69 @@
 # 命令参考
 
-以下示例中的脚本路径相对于插件根目录：
+`HUB` 为 `memory-hub`，或本技能目录下的 `python scripts/memory_hub.py`。全局参数放在子命令前。
 
-```powershell
-python scripts/memory_hub.py --hub .ai-memory-hub doctor
+```bash
+HUB --hub .ai-memory-hub doctor
 ```
 
-全局参数必须放在子命令前：
-
-- `--hub PATH`：指定记忆库，默认 `.ai-memory-hub`。
-- `--json`：输出 JSON，便于代理或脚本继续处理。
+- `--hub PATH`：记忆库目录，默认 `.ai-memory-hub`
+- `--json`：机器可读 JSON
 
 ## 初始化
 
-```powershell
-python scripts/memory_hub.py --hub .ai-memory-hub init
+```bash
+HUB --hub .ai-memory-hub init
 ```
 
-默认生成库内 `.gitignore`，防止记忆被意外提交。只有用户明确要求用 Git 共享记忆时才使用 `init --track`。
+默认生成库内 `.gitignore`。只有用户明确要求用 Git 共享记忆时才使用 `init --track`。
 
 ## 检索与上下文
 
-```powershell
-python scripts/memory_hub.py --hub .ai-memory-hub recall --query "认证 刷新令牌" --limit 8
-python scripts/memory_hub.py --hub .ai-memory-hub recall --query "认证" --min-score 10
-python scripts/memory_hub.py --hub .ai-memory-hub context --query "认证" --max-chars 12000 --token-budget 2048
+```bash
+HUB --hub .ai-memory-hub recall --query "认证 刷新令牌" --limit 8
+HUB --hub .ai-memory-hub recall --query "认证" --min-score 10
+HUB --hub .ai-memory-hub context --query "认证" --max-chars 12000 --token-budget 2048
 ```
 
-`recall --no-archive` 排除归档任务；`--min-score` 过滤低于指定分数的结果。每条结果包含命中原因和可用的结构化来源。
+`recall --no-archive` 排除归档；`--min-score` 过滤低分结果。每条含命中原因与结构化来源。
 
-`context` 先输出历史记忆安全声明，再选择核心记忆和相关片段。`--max-chars` 与 `--token-budget` 同时提供时取更严格的近似限制；`--min-score` 同样用于过滤召回片段。
+`context` 先输出安全声明，再装配核心记忆与相关片段。`--max-chars` 与 `--token-budget` 同时给出时取更严限制。
 
 ## 任务状态
 
-```powershell
-python scripts/memory_hub.py --hub .ai-memory-hub status \
-  --task auth-refresh --agent codex \
+`--agent` 用当前宿主短名（如 `cursor`、`claude`、`codex`），同一项目内保持稳定。
+
+```bash
+HUB --hub .ai-memory-hub status \
+  --task auth-refresh --agent cursor \
   --objective "修复刷新令牌并发问题" --state in-progress \
   --completed "确认重复刷新根因" \
   --next "补充并发测试" --blocker "无"
 ```
 
-`--completed` 可以重复。再次调用时，未提供的字段保留原值。
+`--completed` 可重复。再次调用时，未提供的字段保留原值。
 
 ## 候选记忆、索引和归档
 
-```powershell
-python scripts/memory_hub.py --hub .ai-memory-hub remember `
-  --agent codex --text "刷新请求必须共用单例 Promise" `
-  --tags "auth,concurrency" --type decision `
-  --source-task auth-refresh --confidence confirmed `
+```bash
+HUB --hub .ai-memory-hub remember \
+  --agent cursor --text "刷新请求必须共用单例 Promise" \
+  --tags "auth,concurrency" --type decision \
+  --source-task auth-refresh --confidence confirmed \
   --link "requires:mem-auth-client"
-python scripts/memory_hub.py --hub .ai-memory-hub reindex
-python scripts/memory_hub.py --hub .ai-memory-hub archive --task auth-refresh
+HUB --hub .ai-memory-hub reindex
+HUB --hub .ai-memory-hub archive --task auth-refresh
 ```
 
-`--link` 可以重复，格式为 `relation:target`。允许的类型、置信度和关系值见[存储格式](storage.md)。省略新增参数时仍兼容旧调用，默认类型为 `note`、置信度为 `unspecified`。
+`--link` 可重复，格式 `relation:target`。类型、置信度、关系见 [存储格式](storage.md)。省略新参数时兼容旧调用：默认 `type=note`、`confidence=unspecified`。
 
-归档在目标已存在时拒绝覆盖，避免破坏历史记录。
+归档在目标已存在时拒绝覆盖。
 
 ## 统计与健康检查
 
-```powershell
-python scripts/memory_hub.py --hub .ai-memory-hub stats
-python scripts/memory_hub.py --hub .ai-memory-hub --json doctor
+```bash
+HUB --hub .ai-memory-hub stats
+HUB --hub .ai-memory-hub --json doctor
 ```
 
-`stats` 返回记录数、集合和类型分布、关系数、元数据覆盖率、活动任务与归档任务数量。`doctor` 把缺少结构化元数据和索引可能过期列为警告；目录缺失、编码错误和陈旧写锁仍属于问题。
+`stats` 报告记录数、集合/类型分布、关系数、元数据覆盖率、活动与归档任务数。`doctor` 将缺元数据、索引可能过期列为警告；目录缺失、编码错误、陈旧写锁为问题。

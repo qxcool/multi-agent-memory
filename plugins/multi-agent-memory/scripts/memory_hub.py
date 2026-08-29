@@ -1,17 +1,13 @@
 #!/usr/bin/env python3
-"""无需安装即可运行的兼容入口。"""
+"""兼容入口：委托给 Skill 旁脚本，保持旧文档路径可用。"""
 
 from __future__ import annotations
 
-import sys
+import runpy
 from pathlib import Path
 
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "src"))
-
-from multi_agent_memory.cli import main  # noqa: E402
-
+SKILL_ENTRY = Path(__file__).resolve().parents[1] / "skills" / "multi-agent-memory" / "scripts" / "memory_hub.py"
 
 if __name__ == "__main__":
-    main()
+    runpy.run_path(str(SKILL_ENTRY), run_name="__main__")

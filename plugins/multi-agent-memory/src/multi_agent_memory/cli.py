@@ -35,7 +35,7 @@ def _parse_link(value: str) -> tuple[str, str]:
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="memory-hub", description="面向多代理协作的本地 Markdown 记忆库")
+    parser = argparse.ArgumentParser(prog="memory-hub", description="宿主无关的多代理本地 Markdown 记忆库")
     parser.add_argument("--hub", default=".ai-memory-hub", help="记忆库目录，默认 .ai-memory-hub")
     parser.add_argument("--json", action="store_true", help="输出机器可读 JSON")
     subparsers = parser.add_subparsers(dest="command", required=True)

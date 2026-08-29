@@ -215,6 +215,19 @@ class MemoryHubTests(unittest.TestCase):
         self.assertEqual("legacy-task", payload["task"])
         self.assertTrue(Path(payload["path"]).exists())
 
+    def test_skill_local_cli_entry_resolves_package(self) -> None:
+        script = PLUGIN_ROOT / "skills" / "multi-agent-memory" / "scripts" / "memory_hub.py"
+        completed = subprocess.run(
+            [sys.executable, str(script), "--hub", str(self.root), "--json", "doctor"],
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+        payload = json.loads(completed.stdout)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(str(self.root), payload["hub"])
+
     def test_cli_remember_accepts_structured_metadata(self) -> None:
         script = PLUGIN_ROOT / "scripts" / "memory_hub.py"
         completed = subprocess.run(
