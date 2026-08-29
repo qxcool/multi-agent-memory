@@ -31,7 +31,7 @@ class MemoryHubTests(unittest.TestCase):
         self.assertTrue((self.root / "memory" / "LESSONS.md").exists())
         self.assertEqual("*\n!.gitignore\n", (self.root / ".gitignore").read_text(encoding="utf-8"))
         self.assertIn("AI Memory Hub", (self.root / "INDEX.md").read_text(encoding="utf-8"))
-        self.assertEqual("0.4.1", (self.root / "VERSION").read_text(encoding="utf-8").strip())
+        self.assertEqual("0.4.2", (self.root / "VERSION").read_text(encoding="utf-8").strip())
 
     def test_migrate_upgrades_legacy_hub_structure(self) -> None:
         legacy_root = Path(self.temp.name) / "legacy-hub"
@@ -54,7 +54,7 @@ class MemoryHubTests(unittest.TestCase):
         result = hub.migrate(backfill_hash=True)
         self.assertFalse(result["dry_run"])
         self.assertTrue((legacy_root / "memory" / "LESSONS.md").exists())
-        self.assertEqual("0.4.1", (legacy_root / "VERSION").read_text(encoding="utf-8").strip())
+        self.assertEqual("0.4.2", (legacy_root / "VERSION").read_text(encoding="utf-8").strip())
         self.assertIn("活动任务速览", (legacy_root / "INDEX.md").read_text(encoding="utf-8"))
         self.assertIn("inbox/note.md", result["hashed"])
         meta, _ = __import__("multi_agent_memory.hub", fromlist=["_split_frontmatter"])._split_frontmatter(
@@ -146,10 +146,55 @@ class MemoryHubTests(unittest.TestCase):
         self.assertIn("活动任务速览", index)
         self.assertIn("修认证", index)
 
-    def test_remember_rejects_duplicate_content(self) -> None:
-        self.hub.remember(agent="cursor", text="同一条决策正文")
-        with self.assertRaises(MemoryHubError):
-            self.hub.remember(agent="claude", text="同一条决策正文")
+    def test_remember_dedupes_identical_content(self) -> None:
+        first = self.hub.remember(agent="cursor", text="同一条决策正文")
+        second = self.hub.remember(agent="claude", text="同一条决策正文")
+        self.assertTrue(second["deduped"])
+        self.assertEqual(first["id"], second["id"])
+        notes = [path for path in (self.root / "inbox").glob("*.md") if path.name != "INDEX.md"]
+        self.assertEqual(1, len(notes))
+
+    def test_remember_updates_by_stable_key(self) -> None:
+        first = self.hub.remember(
+            agent="cursor",
+            text="HubLock 用文件锁",
+            key="feature:hub-lock",
+            tags=["map"],
+            memory_type="fact",
+        )
+        second = self.hub.remember(
+            agent="cursor",
+            text="HubLock 用文件锁 + 同进程线程锁",
+            key="feature:hub-lock",
+            tags=["map", "concurrency"],
+            memory_type="fact",
+        )
+        self.assertTrue(second["updated"])
+        self.assertFalse(second["deduped"])
+        self.assertEqual(first["id"], second["id"])
+        self.assertEqual(first["path"], second["path"])
+        notes = [path for path in (self.root / "inbox").glob("*.md") if path.name != "INDEX.md"]
+        self.assertEqual(1, len(notes))
+        body = notes[0].read_text(encoding="utf-8")
+        self.assertIn("同进程线程锁", body)
+        self.assertIn("concurrency", body)
+
+    def test_remember_key_update_wins_over_unrelated_duplicate_text(self) -> None:
+        other = self.hub.remember(agent="cursor", text="共享正文内容")
+        keyed = self.hub.remember(
+            agent="cursor",
+            text="旧版说明",
+            key="feature:shared-doc",
+        )
+        updated = self.hub.remember(
+            agent="cursor",
+            text="共享正文内容",
+            key="feature:shared-doc",
+        )
+        self.assertTrue(updated["updated"])
+        self.assertEqual(keyed["id"], updated["id"])
+        self.assertNotEqual(other["id"], updated["id"])
+        self.assertIn("共享正文内容", Path(updated["path"]).read_text(encoding="utf-8"))
 
     def test_forget_moves_to_archive_forgotten(self) -> None:
         remembered = self.hub.remember(agent="cursor", text="过时的临时结论", memory_type="note")
@@ -416,7 +461,7 @@ class MemoryHubTests(unittest.TestCase):
         )
         payload = json.loads(completed.stdout)
         self.assertTrue(payload["ok"])
-        self.assertEqual(str(self.root), payload["hub"])
+        self.assertEqual(self.hub.root, Path(payload["hub"]).resolve())
 
     def test_cli_remember_accepts_structured_metadata(self) -> None:
         script = PLUGIN_ROOT / "scripts" / "memory_hub.py"

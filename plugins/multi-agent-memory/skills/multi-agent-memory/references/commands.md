@@ -39,8 +39,11 @@ HUB status --task auth-refresh --agent cursor --objective "修刷新" --state in
 HUB status --task auth-refresh --agent cursor --append-completed --completed "定位竞态"
 HUB remember --agent cursor --source-task auth-refresh --type event \
   --tags "pitfall,lesson" --confidence confirmed \
+  --key "pitfall:auth-refresh-singleton" \
   --text "重复刷新会打爆接口；必须复用单例 Promise"
 ```
+
+相同正文会幂等返回（`deduped`）；同一 `--key` 则原地更新（`updated`），不堆重复条目。
 
 ## 收尾沉淀
 

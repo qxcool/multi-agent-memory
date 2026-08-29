@@ -7,6 +7,7 @@ import re
 import shutil
 import socket
 import tempfile
+import threading
 import time
 import uuid
 from contextlib import contextmanager
@@ -19,7 +20,7 @@ from typing import Iterator, Sequence
 COLLECTIONS = ("memory", "sessions", "experiences", "wiki", "inbox", "archive")
 LIST_COLLECTIONS = ("sessions", "inbox", "experiences", "wiki", "memory")
 HUB_DIRNAME = ".ai-memory-hub"
-HUB_FORMAT_VERSION = "0.4.1"
+HUB_FORMAT_VERSION = "0.4.2"
 VERSION_FILENAME = "VERSION"
 PROMOTE_TARGETS = {"memory", "experiences", "wiki"}
 MEMORY_TYPES = {"note", "fact", "decision", "event", "skill", "task", "preference"}
@@ -169,6 +170,19 @@ def _slug(value: str, fallback: str = "note") -> str:
     return value.strip("-")[:60] or fallback
 
 
+def _normalize_memory_key(value: str) -> str:
+    text = _one_line(value)
+    if not text:
+        raise MemoryHubError("记忆 key 不能为空")
+    if any(char in text for char in ("/", "\\", "\x00")):
+        raise MemoryHubError("记忆 key 不能包含路径分隔符")
+    if any(ord(char) < 32 for char in text):
+        raise MemoryHubError("记忆 key 不能包含控制字符")
+    if len(text) > 120:
+        raise MemoryHubError("记忆 key 过长（最多 120 字符）")
+    return text.casefold()
+
+
 def _choice(value: str, allowed: set[str], label: str) -> str:
     value = value.strip().casefold()
     if value not in allowed:
@@ -220,11 +234,28 @@ def _atomic_write(path: Path, content: str) -> None:
 
 
 class HubLock:
-    def __init__(self, root: Path, timeout: float = 10.0, stale_after: float = 120.0):
+    """跨进程文件锁 + 同进程线程锁，避免同 PID 多线程争抢锁文件。"""
+
+    _thread_locks_guard = threading.Lock()
+    _thread_locks: dict[str, threading.Lock] = {}
+
+    def __init__(self, root: Path, timeout: float = 60.0, stale_after: float = 120.0):
         self.path = root / ".memory-hub.lock"
         self.timeout = timeout
         self.stale_after = stale_after
         self.acquired = False
+        self._thread_lock: threading.Lock | None = None
+        self._thread_acquired = False
+
+    @classmethod
+    def _thread_lock_for(cls, path: Path) -> threading.Lock:
+        key = str(path)
+        with cls._thread_locks_guard:
+            lock = cls._thread_locks.get(key)
+            if lock is None:
+                lock = threading.Lock()
+                cls._thread_locks[key] = lock
+            return lock
 
     def _try_reclaim(self) -> bool:
         try:
@@ -239,37 +270,58 @@ class HubLock:
                 return True
             except FileNotFoundError:
                 return True
+            except OSError:
+                return False
         return False
 
     def __enter__(self) -> "HubLock":
         deadline = time.monotonic() + self.timeout
+        self._thread_lock = self._thread_lock_for(self.path)
+        if not self._thread_lock.acquire(timeout=max(0.0, deadline - time.monotonic())):
+            raise MemoryHubError(f"等待记忆库写锁超时：{self.path}")
+        self._thread_acquired = True
         payload = json.dumps(
             {"pid": os.getpid(), "host": socket.gethostname(), "created": time.time()},
             ensure_ascii=False,
         )
-        while True:
-            try:
-                descriptor = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-                with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-                    stream.write(payload)
-                self.acquired = True
-                return self
-            except FileExistsError:
+        try:
+            while True:
                 try:
-                    if self._try_reclaim():
+                    descriptor = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+                        stream.write(payload)
+                    self.acquired = True
+                    return self
+                except FileExistsError:
+                    try:
+                        if self._try_reclaim():
+                            continue
+                    except FileNotFoundError:
                         continue
-                except FileNotFoundError:
-                    continue
-                if time.monotonic() >= deadline:
-                    raise MemoryHubError(f"等待记忆库写锁超时：{self.path}")
-                time.sleep(0.05)
+                    if time.monotonic() >= deadline:
+                        raise MemoryHubError(f"等待记忆库写锁超时：{self.path}")
+                    time.sleep(0.05)
+        except Exception:
+            if self._thread_acquired and self._thread_lock is not None:
+                self._thread_lock.release()
+                self._thread_acquired = False
+            raise
 
     def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
-        if self.acquired:
-            try:
-                self.path.unlink()
-            except FileNotFoundError:
-                pass
+        try:
+            if self.acquired:
+                for _ in range(5):
+                    try:
+                        self.path.unlink()
+                        break
+                    except FileNotFoundError:
+                        break
+                    except OSError:
+                        time.sleep(0.05)
+        finally:
+            if self._thread_acquired and self._thread_lock is not None:
+                self._thread_lock.release()
+                self._thread_acquired = False
 
 
 class MemoryHub:
@@ -578,22 +630,80 @@ class MemoryHub:
         }
 
     def _find_duplicate_by_fingerprint(self, fingerprint: str) -> Path | None:
-        for path in self.root.rglob("*.md"):
-            if path.name == "INDEX.md":
+        for collection in ("inbox", "experiences", "wiki", "memory"):
+            base = self.root / collection
+            if not base.is_dir():
                 continue
-            relative = path.relative_to(self.root)
-            if relative.parts[:2] == ("archive", "forgotten"):
-                continue
-            try:
-                metadata, body = _split_frontmatter(path.read_text(encoding="utf-8"))
-            except (OSError, UnicodeDecodeError):
-                continue
-            existing = metadata.get("content_hash")
-            if isinstance(existing, str) and existing == fingerprint:
-                return path
-            if _content_fingerprint(body) == fingerprint:
-                return path
+            for path in base.rglob("*.md"):
+                if path.name == "INDEX.md" or path.name in CORE_MEMORY_FILES:
+                    continue
+                try:
+                    metadata, body = _split_frontmatter(path.read_text(encoding="utf-8"))
+                except (OSError, UnicodeDecodeError):
+                    continue
+                existing = metadata.get("content_hash")
+                if isinstance(existing, str) and existing:
+                    if existing == fingerprint:
+                        return path
+                    continue
+                if _content_fingerprint(body) == fingerprint:
+                    return path
         return None
+
+    def _find_by_key(self, key: str) -> Path | None:
+        for collection in ("inbox", "experiences", "wiki", "memory"):
+            base = self.root / collection
+            if not base.is_dir():
+                continue
+            for path in base.rglob("*.md"):
+                if path.name == "INDEX.md" or path.name in CORE_MEMORY_FILES:
+                    continue
+                try:
+                    metadata, _ = _split_frontmatter(path.read_text(encoding="utf-8"))
+                except (OSError, UnicodeDecodeError):
+                    continue
+                existing = metadata.get("key")
+                if isinstance(existing, str) and existing.casefold() == key:
+                    return path
+        return None
+
+    def _remember_payload(
+        self,
+        path: Path,
+        metadata: dict[str, object],
+        *,
+        deduped: bool = False,
+        updated: bool = False,
+    ) -> dict[str, object]:
+        tags = metadata.get("tags", [])
+        clean_tags = [str(item) for item in tags] if isinstance(tags, list) else []
+        return {
+            "path": str(path),
+            "agent": str(metadata.get("source_agent", "")),
+            "tags": clean_tags,
+            "deduped": deduped,
+            "updated": updated,
+            **metadata,
+        }
+
+    def _write_remember_file(
+        self,
+        path: Path,
+        *,
+        metadata: dict[str, object],
+        agent: str,
+        text: str,
+        clean_tags: Sequence[str],
+        stamp: str,
+    ) -> None:
+        body = _frontmatter(metadata) + (
+            f"# {_one_line(text)[:80]}\n\n"
+            f"- Agent: {agent}\n"
+            f"- Created: {stamp}\n"
+            f"- Tags: {', '.join(clean_tags)}\n\n"
+            f"{text.rstrip()}\n"
+        )
+        _atomic_write(path, body)
 
     def remember(
         self,
@@ -605,6 +715,7 @@ class MemoryHub:
         source_task: str | None = None,
         confidence: str = "unspecified",
         links: Sequence[tuple[str, str]] = (),
+        key: str | None = None,
     ) -> dict[str, object]:
         self._ensure_initialized()
         agent = _safe_segment(agent, "代理名")
@@ -614,6 +725,7 @@ class MemoryHub:
         memory_type = _choice(memory_type, MEMORY_TYPES, "记忆类型")
         confidence = _choice(confidence, CONFIDENCE_LEVELS, "置信度")
         clean_source_task = _safe_segment(source_task, "来源任务") if source_task else ""
+        clean_key = _normalize_memory_key(key) if key else ""
         clean_links: list[dict[str, str]] = []
         for relation, target in links:
             clean_relation = _choice(relation, RELATION_TYPES, "关系类型")
@@ -623,41 +735,78 @@ class MemoryHub:
             clean_links.append({"relation": clean_relation, "target": clean_target})
         fingerprint = _content_fingerprint(text)
         now = _now()
-        memory_id = f"mem-{uuid.uuid4().hex}"
-        stem = f"{now:%Y%m%d-%H%M%S}-{_slug(agent)}-{_slug(text[:32])}"
+        stamp = now.isoformat(timespec="seconds")
         clean_tags = [_one_line(tag) for tag in tags if tag.strip()]
-        metadata: dict[str, object] = {
-            "id": memory_id,
-            "type": memory_type,
-            "source_task": clean_source_task,
-            "source_agent": agent,
-            "created_at": now.isoformat(timespec="seconds"),
-            "confidence": confidence,
-            "tags": clean_tags,
-            "links": clean_links,
-            "content_hash": fingerprint,
-        }
+
         with self._write_lock():
+            if clean_key:
+                existing_path = self._find_by_key(clean_key)
+                if existing_path is not None:
+                    old_meta, _ = _split_frontmatter(existing_path.read_text(encoding="utf-8"))
+                    old_hash = old_meta.get("content_hash")
+                    if isinstance(old_hash, str) and old_hash == fingerprint:
+                        return self._remember_payload(existing_path, old_meta, deduped=True)
+                    memory_id = str(old_meta.get("id") or f"mem-{uuid.uuid4().hex}")
+                    created_at = str(old_meta.get("created_at") or stamp)
+                    metadata = {
+                        "id": memory_id,
+                        "key": clean_key,
+                        "type": memory_type,
+                        "source_task": clean_source_task,
+                        "source_agent": agent,
+                        "created_at": created_at,
+                        "updated_at": stamp,
+                        "confidence": confidence,
+                        "tags": clean_tags,
+                        "links": clean_links,
+                        "content_hash": fingerprint,
+                    }
+                    self._write_remember_file(
+                        existing_path,
+                        metadata=metadata,
+                        agent=agent,
+                        text=text,
+                        clean_tags=clean_tags,
+                        stamp=created_at,
+                    )
+                    self._reindex_unlocked()
+                    return self._remember_payload(existing_path, metadata, updated=True)
+
             duplicate = self._find_duplicate_by_fingerprint(fingerprint)
             if duplicate is not None:
-                raise MemoryHubError(
-                    f"相同正文已存在，拒绝重复写入：{duplicate.relative_to(self.root).as_posix()}"
-                )
+                metadata, _ = _split_frontmatter(duplicate.read_text(encoding="utf-8"))
+                return self._remember_payload(duplicate, metadata, deduped=True)
+
+            memory_id = f"mem-{uuid.uuid4().hex}"
+            stem = f"{now:%Y%m%d-%H%M%S}-{_slug(agent)}-{_slug(text[:32])}"
+            metadata = {
+                "id": memory_id,
+                "type": memory_type,
+                "source_task": clean_source_task,
+                "source_agent": agent,
+                "created_at": stamp,
+                "confidence": confidence,
+                "tags": clean_tags,
+                "links": clean_links,
+                "content_hash": fingerprint,
+            }
+            if clean_key:
+                metadata["key"] = clean_key
             path = self.root / "inbox" / f"{stem}.md"
             counter = 1
             while path.exists():
                 path = self.root / "inbox" / f"{stem}-{counter}.md"
                 counter += 1
-            body = _frontmatter(metadata) + (
-                f"# {_one_line(text)[:80]}\n\n"
-                f"- Agent: {agent}\n"
-                f"- Created: {now.isoformat(timespec='seconds')}\n"
-                f"- Tags: {', '.join(clean_tags)}\n\n"
-                f"{text.rstrip()}\n"
+            self._write_remember_file(
+                path,
+                metadata=metadata,
+                agent=agent,
+                text=text,
+                clean_tags=clean_tags,
+                stamp=stamp,
             )
-            _atomic_write(path, body)
             self._reindex_unlocked()
-        return {"path": str(path), "agent": agent, "tags": clean_tags, **metadata}
+        return self._remember_payload(path, metadata)
 
     def recall(
         self,
@@ -1021,7 +1170,13 @@ class MemoryHub:
                     )
                 existing = lessons_path.read_text(encoding="utf-8")
                 bullet = f"- `{task}`: {lesson_line}"
-                if bullet not in existing:
+                lesson_norm = lesson_line.casefold()
+                already = bullet in existing or any(
+                    lesson_norm == line.split(":", 1)[-1].strip().casefold()
+                    for line in existing.splitlines()
+                    if line.startswith("- ")
+                )
+                if not already:
                     if not existing.endswith("\n"):
                         existing += "\n"
                     _atomic_write(lessons_path, existing + bullet + "\n")
@@ -1032,7 +1187,7 @@ class MemoryHub:
                         _atomic_write(core_path, "# Core Memory\n\n")
                     core_text = core_path.read_text(encoding="utf-8")
                     pointer = f"- 见教训 `{task}` → experiences（{lesson_line}）"
-                    if pointer not in core_text:
+                    if pointer not in core_text and lesson_line.casefold() not in core_text.casefold():
                         if "## Distilled" not in core_text:
                             core_text = core_text.rstrip() + "\n\n## Distilled\n\n"
                         if not core_text.endswith("\n"):

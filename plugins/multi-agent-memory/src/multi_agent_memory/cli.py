@@ -78,6 +78,10 @@ def _parser() -> argparse.ArgumentParser:
     remember.add_argument("--tags", default="")
     remember.add_argument("--type", dest="memory_type", choices=sorted(MEMORY_TYPES), default="note")
     remember.add_argument("--source-task")
+    remember.add_argument(
+        "--key",
+        help="稳定记忆键；相同 key 原地更新，相同正文幂等跳过",
+    )
     remember.add_argument("--confidence", choices=sorted(CONFIDENCE_LEVELS), default="unspecified")
     remember.add_argument("--link", action="append", type=_parse_link, default=[])
 
@@ -257,6 +261,7 @@ def run(argv: Sequence[str] | None = None) -> int:
                 source_task=args.source_task,
                 confidence=args.confidence,
                 links=args.link,
+                key=args.key,
             )
         elif args.command == "promote":
             result = hub.promote(to=args.to, memory_id=args.memory_id, path=args.path)

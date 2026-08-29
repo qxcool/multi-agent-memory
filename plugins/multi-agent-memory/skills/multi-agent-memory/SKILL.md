@@ -41,13 +41,25 @@ python "<skill>/scripts/memory_hub.py" overview
 ### 2) Handoff（过程中）
 
 有进展：`HUB status … --append-completed --completed "…"`  
-踩坑立刻：
+踩坑立刻（稳定主题用 `--key`，避免重复记）：
 
 ```bash
 HUB remember --agent <agent> --source-task <task> --type event \
   --tags "pitfall,lesson" --confidence confirmed \
+  --key "pitfall:<短主题>" \
   --text "现象 → 原因 → 正确做法 → 下次勿再犯"
 ```
+
+功能/文件地图用稳定 key 更新，不要每次新建：
+
+```bash
+HUB remember --agent <agent> --type fact --tags "map,feature" \
+  --key "feature:<功能名>" \
+  --text "职责…\n关键路径：…\n相关命令：…"
+# 需要长期可见时可：HUB promote --to wiki --id …
+```
+
+相同正文 → 跳过（`deduped`）；相同 `--key` → 原地更新（`updated`）。
 
 **完成：** 过程不丢；踩坑已进 inbox（或已有相同正文则跳过）。
 

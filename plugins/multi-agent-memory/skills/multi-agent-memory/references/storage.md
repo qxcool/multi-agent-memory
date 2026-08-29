@@ -37,7 +37,8 @@ links: [{"relation": "requires", "target": "mem-auth-client"}]
 - 关系：`related_to`、`requires`、`solved_by`、`uses`、`patches`、`conflicts_with`。
 
 - ID 在创建时生成且不随文件名变化。关系目标保存记忆 ID 或调用方能够稳定解析的标识。本版本存储和统计显式关系；召回时若关系两端同时命中则小幅加分。
-- 新记忆写入 `content_hash`（正文规范化短哈希）；相同正文拒绝重复写入。
+- 新记忆可带稳定 `key`；相同正文幂等跳过（返回已有条目），相同 `key` 原地更新并写 `updated_at`。
+- `content_hash` 为正文规范化短哈希，用于去重。
 - `forget` 将条目移入 `archive/forgotten/`，默认召回与列表不展示。
 
 没有前置元数据的旧文件按 `legacy` 类型参与检索。`doctor` 和 `stats` 可以报告覆盖率，但不会自动改写旧文件。
