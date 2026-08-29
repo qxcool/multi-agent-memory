@@ -3,4 +3,4 @@
 from .hub import MemoryHub, resolve_hub
 
 __all__ = ["MemoryHub", "resolve_hub"]
-__version__ = "0.4.0"
+__version__ = "0.4.1"

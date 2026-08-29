@@ -2,6 +2,6 @@
 
 跨 Win / macOS / Linux。三层边界：**Skill**（自动记忆节奏）→ **Python CLI**（锁/校验）→ **Markdown 库**。
 
-记忆分层：L0 `CORE`+`LESSONS`（短、`--core-budget`）→ L1 sessions 过程 → L2 experiences 按需召回 → L3 inbox。`context` 默认不灌 `USER`/`AGENTS`。`distill` 在任务收尾沉淀回顾、晋升 inbox、写入短教训。
+升级后用 `migrate` 把旧库补到当前格式（LESSONS、VERSION、INDEX 速览；可选补 content_hash），不覆盖已有核心正文。`doctor` 发现落后时提示 migrate。
 
-并发：写锁含 pid/host；`status` 锁内重读；`remember` 正文去重。可发现：`overview`/`list`/`INDEX` 活动任务速览。不联网、不用嵌入模型。
+记忆分层：L0 `CORE`+`LESSONS` → L1 sessions → L2 experiences → L3 inbox。`distill` 收尾沉淀。写锁含 pid/host；`remember` 去重。

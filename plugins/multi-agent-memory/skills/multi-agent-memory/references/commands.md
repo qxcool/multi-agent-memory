@@ -8,14 +8,19 @@ python scripts/memory_hub.py
 
 全局参数在子命令前。省略 `--hub` 时向上查找 `.ai-memory-hub`。
 
-## 发现
+## 发现与升级
 
 ```bash
 HUB doctor
+HUB migrate --dry-run
+HUB migrate
+HUB migrate --backfill-hash
 HUB overview
 HUB list sessions
 HUB list inbox --tag pitfall
 ```
+
+升级插件后，对已有 `.ai-memory-hub` 先 `migrate`：补 LESSONS、forgotten 目录、VERSION、重建带活动任务速览的 INDEX；不覆盖已有 CORE/USER 正文。
 
 ## 分层上下文（省 token）
 

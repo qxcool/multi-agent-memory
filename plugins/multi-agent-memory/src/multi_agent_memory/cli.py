@@ -137,6 +137,14 @@ def _parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("overview", help="总览活动任务、inbox 与集合规模")
 
+    migrate = subparsers.add_parser("migrate", help="将旧记忆库升级到当前格式（幂等）")
+    migrate.add_argument("--dry-run", action="store_true", help="只显示将执行的变更")
+    migrate.add_argument(
+        "--backfill-hash",
+        action="store_true",
+        help="为已有前置元数据但缺少 content_hash 的记忆补哈希",
+    )
+
     archive = subparsers.add_parser("archive", help="归档一个活动任务")
     archive.add_argument("--task", required=True)
 
@@ -299,6 +307,8 @@ def run(argv: Sequence[str] | None = None) -> int:
             )
         elif args.command == "overview":
             result = hub.overview()
+        elif args.command == "migrate":
+            result = hub.migrate(dry_run=args.dry_run, backfill_hash=args.backfill_hash)
         elif args.command == "archive":
             result = hub.archive(args.task)
         elif args.command == "reindex":

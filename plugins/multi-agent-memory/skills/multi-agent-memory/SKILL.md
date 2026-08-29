@@ -30,12 +30,13 @@ python "<skill>/scripts/memory_hub.py" overview
 ### 1) Orient + Load（开任务）
 
 1. `HUB doctor`
-2. `HUB overview`（或读 `INDEX.md` 活动任务速览）
-3. `HUB context --query "<任务关键词>" --token-budget 2048 --core-budget 2000`  
+2. 若提示格式版本落后或缺少 LESSONS：`HUB migrate`（可先 `HUB migrate --dry-run`；需要补哈希时加 `--backfill-hash`）
+3. `HUB overview`（或读 `INDEX.md` 活动任务速览）
+4. `HUB context --query "<任务关键词>" --token-budget 2048 --core-budget 2000`  
    需要偏好/协作约定时再加 `--include-user` / `--include-agents`
-4. `HUB status --task <task> --agent <agent> --objective "…" --state in-progress …`
+5. `HUB status --task <task> --agent <agent> --objective "…" --state in-progress …`
 
-**完成：** 已知库概况；短核心 + 相关经验已加载；任务 status 已开写。
+**完成：** 库结构已是当前格式；短核心 + 相关经验已加载；任务 status 已开写。
 
 ### 2) Handoff（过程中）
 

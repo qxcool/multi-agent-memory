@@ -19,11 +19,25 @@ from typing import Iterator, Sequence
 COLLECTIONS = ("memory", "sessions", "experiences", "wiki", "inbox", "archive")
 LIST_COLLECTIONS = ("sessions", "inbox", "experiences", "wiki", "memory")
 HUB_DIRNAME = ".ai-memory-hub"
+HUB_FORMAT_VERSION = "0.4.1"
+VERSION_FILENAME = "VERSION"
 PROMOTE_TARGETS = {"memory", "experiences", "wiki"}
 MEMORY_TYPES = {"note", "fact", "decision", "event", "skill", "task", "preference"}
 CONFIDENCE_LEVELS = {"unspecified", "tentative", "inferred", "confirmed"}
 RELATION_TYPES = {"related_to", "requires", "solved_by", "uses", "patches", "conflicts_with"}
 CORE_MEMORY_FILES = {"CORE.md", "LESSONS.md", "USER.md", "AGENTS.md"}
+CORE_FILE_TEMPLATES = {
+    "memory/CORE.md": (
+        "# Core Memory\n\n"
+        "只记录长期稳定的项目事实与硬约束。长文踩坑写到 experiences，这里最多保留一行指针。\n"
+    ),
+    "memory/LESSONS.md": (
+        "# Lessons\n\n"
+        "一行一条：短教训或「勿再犯」指针。详情见 experiences/。\n"
+    ),
+    "memory/USER.md": "# User Memory\n\n仅记录用户明确要求长期保留的偏好。\n",
+    "memory/AGENTS.md": "# Agent Memory\n\n记录代理协作约定、角色和交接规则。\n",
+}
 STATUS_FIELDS = {
     "目标": "objective",
     "步骤": "steps",
@@ -53,6 +67,26 @@ def resolve_hub(explicit: str | Path | None = None, *, start: Path | None = None
             break
         current = current.parent
     return (start / HUB_DIRNAME).resolve()
+
+
+def _parse_version(value: str) -> tuple[int, ...]:
+    parts: list[int] = []
+    for piece in value.strip().split("."):
+        if piece.isdigit():
+            parts.append(int(piece))
+        else:
+            digits = "".join(char for char in piece if char.isdigit())
+            parts.append(int(digits) if digits else 0)
+    return tuple(parts) or (0,)
+
+
+def _version_less(left: str, right: str) -> bool:
+    a = _parse_version(left)
+    b = _parse_version(right)
+    width = max(len(a), len(b))
+    a = a + (0,) * (width - len(a))
+    b = b + (0,) * (width - len(b))
+    return a < b
 
 
 def _content_fingerprint(text: str) -> str:
@@ -262,19 +296,8 @@ class MemoryHub:
                 if not path.exists():
                     path.mkdir(parents=True)
                     created.append(name + "/")
-            core_files = {
-                "memory/CORE.md": (
-                    "# Core Memory\n\n"
-                    "只记录长期稳定的项目事实与硬约束。长文踩坑写到 experiences，这里最多保留一行指针。\n"
-                ),
-                "memory/LESSONS.md": (
-                    "# Lessons\n\n"
-                    "一行一条：短教训或「勿再犯」指针。详情见 experiences/。\n"
-                ),
-                "memory/USER.md": "# User Memory\n\n仅记录用户明确要求长期保留的偏好。\n",
-                "memory/AGENTS.md": "# Agent Memory\n\n记录代理协作约定、角色和交接规则。\n",
-            }
-            for relative, content in core_files.items():
+            (self.root / "archive" / "forgotten").mkdir(parents=True, exist_ok=True)
+            for relative, content in CORE_FILE_TEMPLATES.items():
                 path = self.root / relative
                 if not path.exists():
                     _atomic_write(path, content)
@@ -283,8 +306,136 @@ class MemoryHub:
             if not track and not ignore.exists():
                 _atomic_write(ignore, "*\n!.gitignore\n")
                 created.append(".gitignore")
+            self._write_version_unlocked(HUB_FORMAT_VERSION)
+            created.append(VERSION_FILENAME)
             self._reindex_unlocked()
-        return {"hub": str(self.root), "created": created, "tracked": track}
+        return {
+            "hub": str(self.root),
+            "created": created,
+            "tracked": track,
+            "format_version": HUB_FORMAT_VERSION,
+        }
+
+    def format_version(self) -> str:
+        path = self.root / VERSION_FILENAME
+        if not path.is_file():
+            return "0.0.0"
+        try:
+            value = path.read_text(encoding="utf-8").strip().splitlines()[0].strip()
+        except (OSError, IndexError):
+            return "0.0.0"
+        return value or "0.0.0"
+
+    def _write_version_unlocked(self, version: str) -> None:
+        _atomic_write(self.root / VERSION_FILENAME, f"{version}\n")
+
+    def migrate(
+        self,
+        *,
+        dry_run: bool = False,
+        backfill_hash: bool = False,
+    ) -> dict[str, object]:
+        """将旧记忆库结构升级到当前格式（幂等）。"""
+        if not self.root.exists():
+            raise MemoryHubError(f"记忆库目录不存在：{self.root}")
+        current = self.format_version()
+        planned: list[str] = []
+        created: list[str] = []
+        updated: list[str] = []
+        hashed: list[str] = []
+
+        for name in COLLECTIONS:
+            path = self.root / name
+            if not path.is_dir():
+                planned.append(f"create-dir:{name}/")
+        forgotten = self.root / "archive" / "forgotten"
+        if not forgotten.is_dir():
+            planned.append("create-dir:archive/forgotten/")
+        for relative in CORE_FILE_TEMPLATES:
+            if not (self.root / relative).exists():
+                planned.append(f"create-file:{relative}")
+        ignore = self.root / ".gitignore"
+        if not ignore.exists():
+            planned.append("create-file:.gitignore")
+        if current != HUB_FORMAT_VERSION:
+            planned.append(f"set-version:{current}->{HUB_FORMAT_VERSION}")
+        planned.append("reindex")
+
+        hash_candidates: list[Path] = []
+        if backfill_hash:
+            for path in self.root.rglob("*.md"):
+                if path.name == "INDEX.md":
+                    continue
+                relative = path.relative_to(self.root)
+                if relative.as_posix() in CORE_FILE_TEMPLATES:
+                    continue
+                if relative.parts and relative.parts[0] == "sessions":
+                    continue
+                try:
+                    metadata, body = _split_frontmatter(path.read_text(encoding="utf-8"))
+                except (OSError, UnicodeDecodeError):
+                    continue
+                if not metadata:
+                    continue
+                existing = metadata.get("content_hash")
+                if isinstance(existing, str) and existing:
+                    continue
+                hash_candidates.append(path)
+                planned.append(f"backfill-hash:{relative.as_posix()}")
+
+        if dry_run:
+            return {
+                "hub": str(self.root),
+                "dry_run": True,
+                "from_version": current,
+                "to_version": HUB_FORMAT_VERSION,
+                "planned": planned,
+                "created": [],
+                "updated": [],
+                "hashed": [],
+            }
+
+        with self._write_lock():
+            for name in COLLECTIONS:
+                path = self.root / name
+                if not path.exists():
+                    path.mkdir(parents=True)
+                    created.append(name + "/")
+            forgotten.mkdir(parents=True, exist_ok=True)
+            if "create-dir:archive/forgotten/" in planned and "archive/forgotten/" not in created:
+                created.append("archive/forgotten/")
+            for relative, content in CORE_FILE_TEMPLATES.items():
+                path = self.root / relative
+                if not path.exists():
+                    _atomic_write(path, content)
+                    created.append(relative)
+            if not ignore.exists():
+                _atomic_write(ignore, "*\n!.gitignore\n")
+                created.append(".gitignore")
+            for path in hash_candidates:
+                try:
+                    metadata, body = _split_frontmatter(path.read_text(encoding="utf-8"))
+                except (OSError, UnicodeDecodeError):
+                    continue
+                metadata["content_hash"] = _content_fingerprint(body)
+                _atomic_write(path, _frontmatter(metadata) + body.lstrip("\n"))
+                hashed.append(path.relative_to(self.root).as_posix())
+            self._write_version_unlocked(HUB_FORMAT_VERSION)
+            updated.append(VERSION_FILENAME)
+            counts = self._reindex_unlocked()
+            updated.append("INDEX.md")
+
+        return {
+            "hub": str(self.root),
+            "dry_run": False,
+            "from_version": current,
+            "to_version": HUB_FORMAT_VERSION,
+            "planned": planned,
+            "created": created,
+            "updated": updated,
+            "hashed": hashed,
+            "index": counts,
+        }
 
     def get_status(self, *, task: str, agent: str) -> dict[str, object]:
         self._ensure_initialized()
@@ -1272,9 +1423,26 @@ class MemoryHub:
                         warnings.append("索引可能早于记忆正文，可运行 reindex 重建")
                 except OSError:
                     pass
+            if not (self.root / "memory" / "LESSONS.md").exists():
+                warnings.append("缺少 memory/LESSONS.md，可运行 migrate 补齐新结构")
+            version = self.format_version()
+            if _version_less(version, HUB_FORMAT_VERSION):
+                warnings.append(
+                    f"记忆库格式版本为 {version}，当前程序期望 {HUB_FORMAT_VERSION}；"
+                    "请运行 memory-hub migrate（可先 --dry-run）"
+                )
+            if root_index.exists():
+                try:
+                    index_text = root_index.read_text(encoding="utf-8")
+                except (OSError, UnicodeDecodeError):
+                    index_text = ""
+                if "活动任务速览" not in index_text:
+                    warnings.append("INDEX.md 缺少活动任务速览，可运行 migrate 或 reindex 升级")
         return {
             "ok": not issues,
             "hub": str(self.root),
+            "format_version": self.format_version() if self.root.exists() else None,
+            "expected_format_version": HUB_FORMAT_VERSION,
             "markdown_files": markdown_count,
             "issues": issues,
             "warnings": warnings,

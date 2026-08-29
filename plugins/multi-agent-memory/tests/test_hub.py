@@ -28,8 +28,43 @@ class MemoryHubTests(unittest.TestCase):
 
     def test_init_creates_private_markdown_structure(self) -> None:
         self.assertTrue((self.root / "memory" / "CORE.md").exists())
+        self.assertTrue((self.root / "memory" / "LESSONS.md").exists())
         self.assertEqual("*\n!.gitignore\n", (self.root / ".gitignore").read_text(encoding="utf-8"))
         self.assertIn("AI Memory Hub", (self.root / "INDEX.md").read_text(encoding="utf-8"))
+        self.assertEqual("0.4.1", (self.root / "VERSION").read_text(encoding="utf-8").strip())
+
+    def test_migrate_upgrades_legacy_hub_structure(self) -> None:
+        legacy_root = Path(self.temp.name) / "legacy-hub"
+        for name in ("memory", "sessions", "experiences", "wiki", "inbox", "archive"):
+            (legacy_root / name).mkdir(parents=True)
+        (legacy_root / "memory" / "CORE.md").write_text("# Core Memory\n\nold\n", encoding="utf-8")
+        (legacy_root / "memory" / "USER.md").write_text("# User Memory\n\n", encoding="utf-8")
+        (legacy_root / "memory" / "AGENTS.md").write_text("# Agent Memory\n\n", encoding="utf-8")
+        inbox = legacy_root / "inbox" / "note.md"
+        inbox.write_text(
+            '---\nid: "mem-legacy"\ntype: "note"\ntags: ["auth"]\n---\n\n# old note\n\nbody\n',
+            encoding="utf-8",
+        )
+        hub = MemoryHub(legacy_root)
+        report = hub.doctor()
+        self.assertTrue(any("migrate" in warning for warning in report["warnings"]))
+        dry = hub.migrate(dry_run=True, backfill_hash=True)
+        self.assertTrue(dry["dry_run"])
+        self.assertTrue(any(item.startswith("create-file:memory/LESSONS.md") for item in dry["planned"]))
+        result = hub.migrate(backfill_hash=True)
+        self.assertFalse(result["dry_run"])
+        self.assertTrue((legacy_root / "memory" / "LESSONS.md").exists())
+        self.assertEqual("0.4.1", (legacy_root / "VERSION").read_text(encoding="utf-8").strip())
+        self.assertIn("活动任务速览", (legacy_root / "INDEX.md").read_text(encoding="utf-8"))
+        self.assertIn("inbox/note.md", result["hashed"])
+        meta, _ = __import__("multi_agent_memory.hub", fromlist=["_split_frontmatter"])._split_frontmatter(
+            inbox.read_text(encoding="utf-8")
+        )
+        self.assertTrue(str(meta.get("content_hash")))
+        # existing CORE body preserved
+        self.assertIn("old", (legacy_root / "memory" / "CORE.md").read_text(encoding="utf-8"))
+        again = hub.migrate(backfill_hash=True)
+        self.assertEqual([], again["hashed"])
 
     def test_status_accepts_legacy_fields_and_preserves_omitted_values(self) -> None:
         self.hub.update_status(
