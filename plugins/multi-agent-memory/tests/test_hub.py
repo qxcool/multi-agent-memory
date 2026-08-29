@@ -105,7 +105,14 @@ class MemoryHubTests(unittest.TestCase):
         ]
         environment = os.environ.copy()
         environment["PYTHONIOENCODING"] = "ascii"
-        completed = subprocess.run(command, check=True, capture_output=True, text=True, env=environment)
+        completed = subprocess.run(
+            command,
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            env=environment,
+        )
         payload = json.loads(completed.stdout)
         self.assertEqual("legacy-task", payload["task"])
         self.assertTrue(Path(payload["path"]).exists())
