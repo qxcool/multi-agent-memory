@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -102,7 +103,9 @@ class MemoryHubTests(unittest.TestCase):
             "--blocker",
             "无",
         ]
-        completed = subprocess.run(command, check=True, capture_output=True, text=True)
+        environment = os.environ.copy()
+        environment["PYTHONIOENCODING"] = "ascii"
+        completed = subprocess.run(command, check=True, capture_output=True, text=True, env=environment)
         payload = json.loads(completed.stdout)
         self.assertEqual("legacy-task", payload["task"])
         self.assertTrue(Path(payload["path"]).exists())

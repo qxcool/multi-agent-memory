@@ -9,6 +9,14 @@ from typing import Any, Sequence
 from .hub import MemoryHub, MemoryHubError, search_results_as_dict
 
 
+def _configure_stdio() -> None:
+    """确保机器可读输出不受 Windows 本地代码页影响。"""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure:
+            reconfigure(encoding="utf-8", errors="backslashreplace")
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="memory-hub", description="面向多代理协作的本地 Markdown 记忆库")
     parser.add_argument("--hub", default=".ai-memory-hub", help="记忆库目录，默认 .ai-memory-hub")
@@ -71,6 +79,7 @@ def _print_human(command: str, result: Any) -> None:
 
 
 def run(argv: Sequence[str] | None = None) -> int:
+    _configure_stdio()
     parser = _parser()
     args = parser.parse_args(argv)
     hub = MemoryHub(Path(args.hub))
