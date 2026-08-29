@@ -48,12 +48,13 @@ HUB remember --agent cursor --source-task auth-refresh --type event \
 ## 收尾沉淀
 
 ```bash
+HUB distill --task auth-refresh --agent cursor
 HUB distill --task auth-refresh --agent cursor --lesson "刷新必须单例，禁止并行重入"
 HUB distill --task auth-refresh --agent cursor --lesson "…" --pin-core
 HUB archive --task auth-refresh
 ```
 
-`distill` 会写 experiences 回顾，并晋升 `source_task` 匹配的 inbox（可用 `--no-promote-inbox` 关闭）。
+默认软总结：`inferred` + `key=retrospective:<task>:<agent>`，覆盖更新 experiences，不写 LESSONS。只有 `--lesson` 才进 L0；并晋升匹配的 inbox（可用 `--no-promote-inbox` 关闭）。
 
 ## 其它
 

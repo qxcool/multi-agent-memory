@@ -118,14 +118,20 @@ def _parser() -> argparse.ArgumentParser:
     context.add_argument("--include-agents", action="store_true", help="将 AGENTS.md 纳入 L0")
     _add_recall_filters(context)
 
-    distill = subparsers.add_parser("distill", help="任务收尾：沉淀回顾与教训")
+    distill = subparsers.add_parser(
+        "distill",
+        help="任务收尾：软自动总结（inferred，按 key 覆盖），可选写入 LESSONS/CORE",
+    )
     distill.add_argument("--task", required=True)
     distill.add_argument("--agent", required=True)
-    distill.add_argument("--lesson", help="一行短教训，写入 LESSONS.md")
+    distill.add_argument(
+        "--lesson",
+        help="显式一行短教训才写入 LESSONS.md（默认仅 experiences 软总结）",
+    )
     distill.add_argument(
         "--pin-core",
         action="store_true",
-        help="同时在 CORE.md 追加一行指针（保持 CORE 精简）",
+        help="仅在同时提供 --lesson 时，于 CORE.md 追加一行指针",
     )
     distill.add_argument(
         "--no-promote-inbox",

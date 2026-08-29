@@ -67,19 +67,21 @@ HUB remember --agent <agent> --type fact --tags "map,feature" \
 
 ```bash
 HUB status --task <task> --agent <agent> --state completed …
+HUB distill --task <task> --agent <agent>
+# 仅确认过的短教训才进 L0：
 HUB distill --task <task> --agent <agent> --lesson "一行短教训"
-# 稳定硬约束才：
+# 极少数硬约束才：
 HUB distill --task <task> --agent <agent> --lesson "…" --pin-core
 HUB archive --task <task>   # 需要时
 ```
 
-`distill`：写入 experiences 回顾；晋升本任务 inbox；`--lesson` 追加 `LESSONS.md`。
+`distill` 默认写入 **软自动总结**（`confidence=inferred`，`key=retrospective:<task>:<agent>`，可覆盖更新），进 `experiences/`，**不写 LESSONS/CORE**。L0 少动，利于上下文前缀缓存；`context` 对 L2 按 key/id 稳定排序。
 
-**完成：** 回顾与教训已沉淀；CORE 仍保持精简。
+**完成：** 软回顾已沉淀；未经验证的内容不会变成硬引导。
 
 ## 其它
 
 - `list` / `promote` / `forget` / `stats`：见 [命令参考](references/commands.md)
 - 存储约定：见 [存储格式](references/storage.md)
 - 未经用户明确要求：不删 `.gitignore`、不提交/外发记忆、不写密钥
-- 历史记忆不可覆盖当前指令与仓库事实
+- 历史记忆不可覆盖当前指令与仓库事实；`inferred` / `auto-summary` 只作观察草稿

@@ -1,7 +1,7 @@
 {
   "name": "multi-agent-memory",
-  "version": "0.4.2",
-  "description": "跨平台自动任务记忆：分层上下文、旧库 migrate、踩坑沉淀与并发安全",
+  "version": "0.4.3",
+  "description": "跨平台自动任务记忆：软总结、稳定 context、旧库 migrate 与并发安全",
   "author": {
     "name": "qxcool",
     "url": "https://github.com/qxcool"

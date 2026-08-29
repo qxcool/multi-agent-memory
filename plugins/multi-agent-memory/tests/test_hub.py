@@ -31,7 +31,7 @@ class MemoryHubTests(unittest.TestCase):
         self.assertTrue((self.root / "memory" / "LESSONS.md").exists())
         self.assertEqual("*\n!.gitignore\n", (self.root / ".gitignore").read_text(encoding="utf-8"))
         self.assertIn("AI Memory Hub", (self.root / "INDEX.md").read_text(encoding="utf-8"))
-        self.assertEqual("0.4.2", (self.root / "VERSION").read_text(encoding="utf-8").strip())
+        self.assertEqual("0.4.3", (self.root / "VERSION").read_text(encoding="utf-8").strip())
 
     def test_migrate_upgrades_legacy_hub_structure(self) -> None:
         legacy_root = Path(self.temp.name) / "legacy-hub"
@@ -54,7 +54,7 @@ class MemoryHubTests(unittest.TestCase):
         result = hub.migrate(backfill_hash=True)
         self.assertFalse(result["dry_run"])
         self.assertTrue((legacy_root / "memory" / "LESSONS.md").exists())
-        self.assertEqual("0.4.2", (legacy_root / "VERSION").read_text(encoding="utf-8").strip())
+        self.assertEqual("0.4.3", (legacy_root / "VERSION").read_text(encoding="utf-8").strip())
         self.assertIn("活动任务速览", (legacy_root / "INDEX.md").read_text(encoding="utf-8"))
         self.assertIn("inbox/note.md", result["hashed"])
         meta, _ = __import__("multi_agent_memory.hub", fromlist=["_split_frontmatter"])._split_frontmatter(
@@ -357,6 +357,9 @@ class MemoryHubTests(unittest.TestCase):
             pin_core=True,
         )
         self.assertTrue(str(result["retrospective"]).startswith("experiences/"))
+        self.assertEqual("inferred", result["confidence"])
+        self.assertEqual("retrospective:auth:cursor", result["key"])
+        self.assertTrue(result["updated"])
         self.assertTrue(any(path.startswith("experiences/") for path in result["promoted"]))
         self.assertFalse(Path(remembered["path"]).exists())
         lessons = (self.root / "memory" / "LESSONS.md").read_text(encoding="utf-8")
@@ -364,6 +367,64 @@ class MemoryHubTests(unittest.TestCase):
         core = (self.root / "memory" / "CORE.md").read_text(encoding="utf-8")
         self.assertIn("## Distilled", core)
         self.assertIn("`auth`", core)
+        meta, body = __import__("multi_agent_memory.hub", fromlist=["_split_frontmatter"])._split_frontmatter(
+            (self.root / result["retrospective"]).read_text(encoding="utf-8")
+        )
+        self.assertEqual("inferred", meta.get("confidence"))
+        self.assertIn("auto-summary", meta.get("tags", []))
+        self.assertIn("观察草稿", body)
+
+    def test_distill_soft_summary_upserts_without_touching_lessons(self) -> None:
+        self.hub.update_status(
+            task="cache-task",
+            agent="cursor",
+            objective="稳缓存",
+            state="completed",
+            completed=["初版"],
+        )
+        first = self.hub.distill(task="cache-task", agent="cursor")
+        self.assertTrue(first["updated"])
+        self.assertFalse(first["lessons_updated"])
+        lessons_before = (self.root / "memory" / "LESSONS.md").read_text(encoding="utf-8")
+        self.hub.update_status(
+            task="cache-task",
+            agent="cursor",
+            completed=["初版", "再 distill"],
+            append_completed=False,
+        )
+        second = self.hub.distill(task="cache-task", agent="cursor")
+        self.assertTrue(second["updated"])
+        self.assertEqual(first["retrospective"], second["retrospective"])
+        self.assertEqual(first["key"], second["key"])
+        body = (self.root / second["retrospective"]).read_text(encoding="utf-8")
+        self.assertIn("再 distill", body)
+        self.assertEqual(lessons_before, (self.root / "memory" / "LESSONS.md").read_text(encoding="utf-8"))
+        third = self.hub.distill(task="cache-task", agent="cursor")
+        self.assertTrue(third["deduped"])
+
+    def test_context_l2_order_is_stable_by_key(self) -> None:
+        zebra = self.hub.remember(
+            agent="cursor",
+            text="zebra 主题说明很长以便召回",
+            key="feature:zebra",
+            memory_type="fact",
+        )
+        alpha = self.hub.remember(
+            agent="cursor",
+            text="alpha 主题说明很长以便召回",
+            key="feature:alpha",
+            memory_type="fact",
+        )
+        self.hub.promote(to="experiences", memory_id=str(zebra["id"]))
+        self.hub.promote(to="experiences", memory_id=str(alpha["id"]))
+        first = self.hub.context(query="主题说明", max_chars=12000)
+        second = self.hub.context(query="主题说明", max_chars=12000)
+        self.assertEqual(first, second)
+        alpha_at = first.find("feature:alpha")
+        zebra_at = first.find("feature:zebra")
+        self.assertGreater(alpha_at, 0)
+        self.assertGreater(zebra_at, 0)
+        self.assertLess(alpha_at, zebra_at)
 
     def test_stats_reports_metadata_coverage_types_and_relations(self) -> None:
         self.hub.remember(
