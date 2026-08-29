@@ -4,9 +4,9 @@ build-backend = "hatchling.build"
 
 [project]
 name = "multi-agent-memory"
-version = "0.1.0"
+version = "0.2.0"
 description = "面向编码代理的本地优先 Markdown 共享记忆库"
-readme = "README.md"
+readme = { text = "Multi-Agent Memory 是面向编码代理的本地优先 Markdown 共享记忆库。", content-type = "text/markdown" }
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "qxcool" }]

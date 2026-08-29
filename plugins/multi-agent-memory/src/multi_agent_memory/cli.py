@@ -6,7 +6,14 @@ import sys
 from pathlib import Path
 from typing import Any, Sequence
 
-from .hub import MemoryHub, MemoryHubError, search_results_as_dict
+from .hub import (
+    CONFIDENCE_LEVELS,
+    MEMORY_TYPES,
+    RELATION_TYPES,
+    MemoryHub,
+    MemoryHubError,
+    search_results_as_dict,
+)
 
 
 def _configure_stdio() -> None:
@@ -15,6 +22,16 @@ def _configure_stdio() -> None:
         reconfigure = getattr(stream, "reconfigure", None)
         if reconfigure:
             reconfigure(encoding="utf-8", errors="backslashreplace")
+
+
+def _parse_link(value: str) -> tuple[str, str]:
+    relation, separator, target = value.partition(":")
+    if not separator or not relation.strip() or not target.strip():
+        raise argparse.ArgumentTypeError("关系必须使用 relation:target 格式")
+    if relation.strip().casefold() not in RELATION_TYPES:
+        choices = "、".join(sorted(RELATION_TYPES))
+        raise argparse.ArgumentTypeError(f"关系类型必须是：{choices}")
+    return relation.strip(), target.strip()
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -40,20 +57,28 @@ def _parser() -> argparse.ArgumentParser:
     remember.add_argument("--agent", required=True)
     remember.add_argument("--text", required=True)
     remember.add_argument("--tags", default="")
+    remember.add_argument("--type", dest="memory_type", choices=sorted(MEMORY_TYPES), default="note")
+    remember.add_argument("--source-task")
+    remember.add_argument("--confidence", choices=sorted(CONFIDENCE_LEVELS), default="unspecified")
+    remember.add_argument("--link", action="append", type=_parse_link, default=[])
 
     recall = subparsers.add_parser("recall", help="全文检索记忆")
     recall.add_argument("--query", required=True)
     recall.add_argument("--limit", type=int, default=10)
+    recall.add_argument("--min-score", type=int, default=1)
     recall.add_argument("--no-archive", action="store_true")
 
     context = subparsers.add_parser("context", help="生成适合交给代理的紧凑上下文")
     context.add_argument("--query")
     context.add_argument("--max-chars", type=int, default=12000)
+    context.add_argument("--token-budget", type=int)
+    context.add_argument("--min-score", type=int, default=1)
 
     archive = subparsers.add_parser("archive", help="归档一个活动任务")
     archive.add_argument("--task", required=True)
 
     subparsers.add_parser("reindex", help="重建全部索引")
+    subparsers.add_parser("stats", help="查看记录、类型、关系和元数据覆盖率")
     subparsers.add_parser("doctor", help="只读检查结构、编码和写锁")
     return parser
 
@@ -64,7 +89,16 @@ def _print_human(command: str, result: Any) -> None:
             print("未找到匹配记忆")
             return
         for item in result:
-            print(f"[{item.score}] {item.path}\n{item.snippet}\n")
+            provenance = " / ".join(
+                value for value in (item.source_task, item.source_agent, item.created_at) if value
+            ) or "旧版文件"
+            print(
+                f"[{item.score}] {item.path}\n"
+                f"类型：{item.memory_type or 'legacy'}\n"
+                f"原因：{item.reason}\n"
+                f"来源：{provenance}\n"
+                f"{item.snippet}\n"
+            )
         return
     if command == "context":
         print(result)
@@ -99,16 +133,36 @@ def run(argv: Sequence[str] | None = None) -> int:
             )
         elif args.command == "remember":
             tags = [tag.strip() for tag in args.tags.split(",") if tag.strip()]
-            result = hub.remember(agent=args.agent, text=args.text, tags=tags)
+            result = hub.remember(
+                agent=args.agent,
+                text=args.text,
+                tags=tags,
+                memory_type=args.memory_type,
+                source_task=args.source_task,
+                confidence=args.confidence,
+                links=args.link,
+            )
         elif args.command == "recall":
-            search_results = hub.recall(args.query, limit=args.limit, include_archive=not args.no_archive)
+            search_results = hub.recall(
+                args.query,
+                limit=args.limit,
+                include_archive=not args.no_archive,
+                min_score=args.min_score,
+            )
             result = search_results_as_dict(search_results) if args.json else search_results
         elif args.command == "context":
-            result = hub.context(args.query, max_chars=args.max_chars)
+            result = hub.context(
+                args.query,
+                max_chars=args.max_chars,
+                token_budget=args.token_budget,
+                min_score=args.min_score,
+            )
         elif args.command == "archive":
             result = hub.archive(args.task)
         elif args.command == "reindex":
             result = hub.reindex()
+        elif args.command == "stats":
+            result = hub.stats()
         else:
             result = hub.doctor()
     except MemoryHubError as error:

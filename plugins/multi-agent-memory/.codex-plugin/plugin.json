@@ -1,7 +1,7 @@
 {
   "name": "multi-agent-memory",
-  "version": "0.1.0",
-  "description": "面向多个编码代理的本地优先 Markdown 共享记忆库",
+  "version": "0.2.0",
+  "description": "具备可追溯元数据、可解释召回和预算控制的本地优先 Markdown 共享记忆库",
   "author": {
     "name": "qxcool",
     "url": "https://github.com/qxcool"
@@ -14,7 +14,7 @@
   "interface": {
     "displayName": "Multi Agent Memory",
     "shortDescription": "让多个编码代理共享本地项目记忆",
-    "longDescription": "使用可审阅的 Markdown 文件共享任务状态、经验、Wiki 和长期项目上下文。支持并发安全写入、全文检索、归档和旧版命令兼容。",
+    "longDescription": "使用可审阅的 Markdown 文件共享任务状态、经验、Wiki 和长期项目上下文。支持可追溯元数据、可解释召回、上下文预算、并发安全写入、归档和旧版命令兼容。",
     "developerName": "qxcool",
     "category": "Productivity",
     "capabilities": ["Read", "Write", "Local-first"],

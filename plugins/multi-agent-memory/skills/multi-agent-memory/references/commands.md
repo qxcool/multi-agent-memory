@@ -23,10 +23,13 @@ python scripts/memory_hub.py --hub .ai-memory-hub init
 
 ```powershell
 python scripts/memory_hub.py --hub .ai-memory-hub recall --query "认证 刷新令牌" --limit 8
-python scripts/memory_hub.py --hub .ai-memory-hub context --query "认证" --max-chars 12000
+python scripts/memory_hub.py --hub .ai-memory-hub recall --query "认证" --min-score 10
+python scripts/memory_hub.py --hub .ai-memory-hub context --query "认证" --max-chars 12000 --token-budget 2048
 ```
 
-`recall --no-archive` 排除归档任务；`context` 总是包含三份核心记忆，并附加活动记忆的相关片段。
+`recall --no-archive` 排除归档任务；`--min-score` 过滤低于指定分数的结果。每条结果包含命中原因和可用的结构化来源。
+
+`context` 先输出历史记忆安全声明，再选择核心记忆和相关片段。`--max-chars` 与 `--token-budget` 同时提供时取更严格的近似限制；`--min-score` 同样用于过滤召回片段。
 
 ## 任务状态
 
@@ -43,9 +46,24 @@ python scripts/memory_hub.py --hub .ai-memory-hub status \
 ## 候选记忆、索引和归档
 
 ```powershell
-python scripts/memory_hub.py --hub .ai-memory-hub remember --agent codex --text "刷新请求必须共用单例 Promise" --tags "auth,concurrency"
+python scripts/memory_hub.py --hub .ai-memory-hub remember `
+  --agent codex --text "刷新请求必须共用单例 Promise" `
+  --tags "auth,concurrency" --type decision `
+  --source-task auth-refresh --confidence confirmed `
+  --link "requires:mem-auth-client"
 python scripts/memory_hub.py --hub .ai-memory-hub reindex
 python scripts/memory_hub.py --hub .ai-memory-hub archive --task auth-refresh
 ```
 
+`--link` 可以重复，格式为 `relation:target`。允许的类型、置信度和关系值见[存储格式](storage.md)。省略新增参数时仍兼容旧调用，默认类型为 `note`、置信度为 `unspecified`。
+
 归档在目标已存在时拒绝覆盖，避免破坏历史记录。
+
+## 统计与健康检查
+
+```powershell
+python scripts/memory_hub.py --hub .ai-memory-hub stats
+python scripts/memory_hub.py --hub .ai-memory-hub --json doctor
+```
+
+`stats` 返回记录数、集合和类型分布、关系数、元数据覆盖率、活动任务与归档任务数量。`doctor` 把缺少结构化元数据和索引可能过期列为警告；目录缺失、编码错误和陈旧写锁仍属于问题。
