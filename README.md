@@ -1,113 +1,158 @@
 # Multi-Agent Memory
 
-面向任意编码代理、任意操作系统（Windows / macOS / Linux）的本地优先共享记忆。每次任务留下过程与踩坑，核心记忆与经验分层装配以节省 token。
+面向任意编码代理（Cursor / Codex / Claude Code 等）、跨 Windows / macOS / Linux 的**本地优先**共享记忆库。
 
-核心交付：**Agent Skill（自动开场/收尾节奏）** + **无依赖 Python CLI**。多脚本经写锁；`overview` / `INDEX.md` 让其他 AI 知道库里有什么。
+当前版本 **[v0.7.1](https://github.com/qxcool/multi-agent-memory/releases/tag/v0.7.1)**（记忆库格式仍为 0.7.0）。核心交付：
 
-## 特点
+- **Agent Skill** — 自动开场 / 交接 / 收尾节奏  
+- **无依赖 Python CLI**（`memory-hub`）— 写锁、校验、分层装配  
+- **可选 MCP**（`memory-hub-mcp`）与 **Cursor hooks**
 
-- 多代理共享：同一任务下，每个代理维护独立状态文件。
-- 本地优先：默认阻止 `.ai-memory-hub` 被 Git 意外提交。
-- 可审阅：所有数据都是 UTF-8 Markdown，可直接阅读和修改。
-- 可追溯：新记忆记录稳定 ID、类型、来源、置信度、标签和显式关系。
-- 可解释召回：返回相关度分数、命中原因和来源信息，并支持最低分过滤。
-- 预算控制：生成上下文时按字符或近似 Token 预算选择完整记忆区块。
-- 并发安全：跨平台写锁、同目录临时文件和原子替换。
-- 旧版兼容：支持原 `memory_hub.py` 的 `recall`、`status`、`remember`、`reindex` 和 `archive` 调用。
-- 零运行时依赖：仅需 Python 3.10 或更高版本。
-- 中文友好召回：无空格中文查询按字二元组匹配，并对 `confirmed` / `inferred` 置信度加权。
-- 增量索引：写入只刷新受影响集合的 INDEX，全量 `reindex` 仍可用。
-- 功能地图：`map upsert` / `locate` / `map list` 快速定位职责与关联文件，减少每次扫仓库。
-- 自我进化：`feedback useful|stale|wrong` 巩固或降权记忆。
-- 前缀缓存友好：固定 `status --query`、context 稳定装配、默认排除 auto-summary。
-- 一站式闭环：`orient` 开场、`close` 收尾、`evolve` 自我进化扫描。
-- 本地检索索引：`meta/search-index.json` 加速 recall/locate（Markdown 仍是真相源）。
-- 可选 MCP：`memory-hub-mcp` 暴露 orient/locate/context/map/doctor。
-- Cursor hooks 适配：`adapters/cursor/`（sessionStart 提醒；stop 可选跟进）。
+目标：积累项目记忆、省 token、快速定位功能/文件、自我进化，且**不破坏前缀缓存**。
 
-## 作为通用 Skill 使用
-
-1. 安装 CLI 包（Skill 脚本也依赖该包，或需能从仓库解析到 `src/`）：
+## 快速开始
 
 ```bash
+# 1) 安装 CLI
 python -m pip install ./plugins/multi-agent-memory
-```
+# 或指定版本：pip install "git+https://github.com/qxcool/multi-agent-memory.git@v0.7.1#subdirectory=plugins/multi-agent-memory"
 
-2. 将目录 `plugins/multi-agent-memory/skills/multi-agent-memory` 安装到你的代理 Skill 目录。
+# 2) 把 Skill 拷到代理的 skills 目录
+#    plugins/multi-agent-memory/skills/multi-agent-memory  →  ~/.claude/skills/ 等
 
-代理按 `SKILL.md` 选择 Bootstrap / Load / Handoff / Remember / Curate / Close。省略 `--hub` 时会从当前目录向上查找 `.ai-memory-hub`。
-
-CLI 入口（任选其一）：
-
-```bash
+# 3) 初始化或升级记忆库（在项目根目录）
+memory-hub init
+memory-hub migrate          # 旧库升级到格式 0.7.0
 memory-hub doctor
-python plugins/multi-agent-memory/skills/multi-agent-memory/scripts/memory_hub.py doctor
-python plugins/multi-agent-memory/scripts/memory_hub.py doctor
 ```
 
-常用命令：
+推荐一站式节奏：
 
 ```bash
 memory-hub orient --task demo --agent cursor --query "演示" --objective "演示共享状态"
+# 将返回的 context 整段注入一次（勿叠 locate + context 双前缀）
+
 memory-hub map upsert --agent cursor --feature demo --role "演示入口" --path "README.md"
 memory-hub locate --query "演示"
-memory-hub map list
-memory-hub evolve
+
 memory-hub remember --agent cursor --source-task demo --type event --tags "pitfall,lesson" \
   --key "pitfall:demo" --text "现象 → 原因 → 做法 → 勿再犯"
 memory-hub feedback --id mem-xxxxxxxx --signal useful
+
 memory-hub close --task demo --agent cursor --lesson "一行短教训"
-memory-hub stats
+memory-hub evolve              # dry-run
 ```
 
-## 安装到 Codex（可选适配）
+全局参数在子命令前。省略 `--hub` 时从当前目录向上查找 `.ai-memory-hub`。
+
+## 特点
+
+| 能力 | 说明 |
+|---|---|
+| 多代理共享 | 同一任务下每代理独立 status；共享 wiki / experiences |
+| 本地可审阅 | UTF-8 Markdown；默认 `.gitignore` 阻止误提交 |
+| 分层上下文 | L0 CORE+LESSONS → L0.5 功能地图 → L2 经验；（L1 status 仅放末尾） |
+| 前缀缓存友好 | 固定 `status --query`；选 Top 按分、装配按 key；正文不含分数/置信度 |
+| 功能地图 | `map upsert` / `locate` / `map list`，减少每次扫仓库 |
+| 自我进化 | `feedback` + `evolve`；`doctor` 提示失效路径 / 缺 distill |
+| 本地检索索引 | `meta/search-index.json` 加速 recall/locate（Markdown 仍是真相源） |
+| 零运行时依赖 | 仅需 Python ≥ 3.10；CJK 二元组召回 + 置信度加权 |
+| 并发安全 | 跨平台写锁、原子替换 |
+
+## Cursor hooks（可选）
+
+适配文件在 [`plugins/multi-agent-memory/adapters/cursor/`](plugins/multi-agent-memory/adapters/cursor/)。
+
+```powershell
+# 项目级示例
+New-Item -ItemType Directory -Force .cursor\hooks | Out-Null
+Copy-Item plugins\multi-agent-memory\adapters\cursor\hooks\*.py .cursor\hooks\
+```
+
+`.cursor/hooks.json`：
+
+```json
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      { "command": "python .cursor/hooks/session_start.py", "timeout": 10 }
+    ],
+    "stop": [
+      { "command": "python .cursor/hooks/stop.py", "timeout": 5, "loop_limit": 1 }
+    ]
+  }
+}
+```
+
+- `sessionStart`：注入短提醒，并设置 `MEMORY_HUB_ROOT`
+- `stop`：默认不自动跟进；设 `MEMORY_HUB_STOP_FOLLOWUP=1` 才提示 close/evolve
+
+## MCP（可选）
+
+```bash
+memory-hub-mcp
+# 或：python -m multi_agent_memory.mcp_server
+```
+
+工具：`memory_orient` / `memory_locate` / `memory_context` / `memory_map_upsert` / `memory_doctor`。
+
+Cursor MCP 配置示例：
+
+```json
+{
+  "mcpServers": {
+    "multi-agent-memory": {
+      "command": "memory-hub-mcp",
+      "args": []
+    }
+  }
+}
+```
+
+## 安装到 Codex（可选）
 
 ```powershell
 codex plugin marketplace add qxcool/multi-agent-memory
 codex plugin add multi-agent-memory@multi-agent-memory
 ```
 
-重新打开任务后即可让代理初始化或检索共享记忆。行为与通用 Skill 相同。
+重新打开任务后即可使用；行为与通用 Skill 相同。详见 [`adapters/codex/`](plugins/multi-agent-memory/adapters/codex/)。
 
 ## 数据结构
 
 ```text
 .ai-memory-hub/
 ├── memory/        CORE + LESSONS（短）/ USER / AGENTS
-├── sessions/      任务过程
+├── sessions/      任务过程（含可选「检索词」）
 ├── experiences/   完整踩坑与回顾（按需召回）
-├── wiki/          项目知识
+├── wiki/          项目知识与 feature 地图
 ├── inbox/         候选
 ├── archive/       归档与 forgotten/
 ├── meta/          侧车检索索引（可再生）
 └── INDEX.md       总索引 + 活动任务速览
 ```
 
-完整命令和存储约束见 [命令参考](plugins/multi-agent-memory/skills/multi-agent-memory/references/commands.md) 与 [存储格式](plugins/multi-agent-memory/skills/multi-agent-memory/references/storage.md)。
+更多说明：
 
-新建记忆可声明结构化语义，同时仍保存为普通 Markdown：
-
-```bash
-python plugins/multi-agent-memory/skills/multi-agent-memory/scripts/memory_hub.py --hub .ai-memory-hub remember \
-  --agent cursor --text "刷新请求必须复用同一个任务" \
-  --type decision --source-task auth-refresh --confidence confirmed \
-  --tags "auth,concurrency" --link "requires:mem-auth-client"
-```
+- [命令参考](plugins/multi-agent-memory/skills/multi-agent-memory/references/commands.md)
+- [存储格式](plugins/multi-agent-memory/skills/multi-agent-memory/references/storage.md)
+- [架构说明](docs/architecture.md)
 
 ## 从旧版迁移
 
-无需转换数据。先对原目录执行只读检查和检索：
-
 ```bash
-python plugins/multi-agent-memory/skills/multi-agent-memory/scripts/memory_hub.py --hub /path/to/.ai-memory-hub doctor
-python plugins/multi-agent-memory/skills/multi-agent-memory/scripts/memory_hub.py --hub /path/to/.ai-memory-hub recall --query "已知项目关键词"
+memory-hub --hub /path/to/.ai-memory-hub doctor
+memory-hub --hub /path/to/.ai-memory-hub migrate --dry-run
+memory-hub --hub /path/to/.ai-memory-hub migrate
+memory-hub --hub /path/to/.ai-memory-hub reindex   # 重建 Markdown INDEX + search-index
 ```
 
-确认结果后再运行 `reindex`。该命令只重建索引，不改写记忆正文。
+`migrate` 补齐 LESSONS / VERSION / INDEX 速览等结构；`reindex` 不改写记忆正文。
 
 ## 隐私与安全
 
-记忆中可能包含内部架构、客户信息或凭据线索。插件不会联网，也不会自动提交数据。召回上下文会明确标注为不可信历史参考，不能覆盖当前用户指令、系统约束和当前仓库事实。不要把密钥写入记忆；只有在确认内容可公开时，才删除库内 `.gitignore` 或使用 `init --track`。
+记忆可能含内部架构或凭据线索。本工具不联网、不自动提交。召回上下文标明为不可信历史参考，不能覆盖当前用户指令与仓库事实。勿写入密钥；仅在确认可公开时删除库内 `.gitignore` 或使用 `init --track`。
 
 ## 开发
 
@@ -115,4 +160,4 @@ python plugins/multi-agent-memory/skills/multi-agent-memory/scripts/memory_hub.p
 python -m unittest discover -s plugins/multi-agent-memory/tests -v
 ```
 
-项目采用 MIT 许可证，欢迎提交问题与改进。
+MIT License。问题与改进欢迎提 Issue / PR。

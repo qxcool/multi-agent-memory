@@ -1,6 +1,6 @@
 {
   "name": "multi-agent-memory",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "完整闭环：orient/close/evolve、功能地图、缓存友好 context、MCP/hooks",
   "author": {
     "name": "qxcool",

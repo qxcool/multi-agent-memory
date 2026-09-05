@@ -10,7 +10,7 @@ from .hub import MemoryHub, MemoryHubError, resolve_hub
 
 
 SERVER_NAME = "multi-agent-memory"
-SERVER_VERSION = "0.7.0"
+SERVER_VERSION = "0.7.1"
 
 TOOLS = [
     {

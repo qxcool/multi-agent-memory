@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "multi-agent-memory"
-version = "0.7.0"
+version = "0.7.1"
 description = "宿主无关的本地优先 Markdown 共享记忆库（Skill + CLI + MCP）"
 readme = { text = "Multi-Agent Memory 是面向编码代理的本地优先 Markdown 共享记忆库。", content-type = "text/markdown" }
 requires-python = ">=3.10"

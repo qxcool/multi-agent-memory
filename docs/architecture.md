@@ -2,7 +2,7 @@
 
 跨 Win / macOS / Linux。边界：**Skill**（触发与节奏）→ **CLI / MCP**（锁/校验）→ **Markdown 库**（+ 可再生侧车索引）→ 可选 **Cursor hooks**。
 
-格式版本 **0.7.0**：在 0.6 闭环之上增加本地检索索引、零依赖 MCP、Cursor hooks 适配。升级后用 `migrate` 补结构（LESSONS、VERSION、INDEX 速览；可选 content_hash）；`reindex` 重建 `meta/search-index.json`。
+包版本 **0.7.1** / 记忆库格式 **0.7.0**：本地检索索引、零依赖 MCP、Cursor hooks 适配。升级后用 `migrate` 补结构（LESSONS、VERSION、INDEX 速览；可选 content_hash）；`reindex` 重建 `meta/search-index.json`。
 
 记忆分层：L0 CORE+LESSONS → L0.5 feature 地图 → L1 sessions（仅末尾）→ L2 experiences → L3 inbox。
 
