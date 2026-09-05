@@ -3,13 +3,13 @@
   "hooks": {
     "sessionStart": [
       {
-        "command": "python adapters/cursor/hooks/session_start.py",
+        "command": "python .cursor/hooks/session_start.py",
         "timeout": 10
       }
     ],
     "stop": [
       {
-        "command": "python adapters/cursor/hooks/stop.py",
+        "command": "python .cursor/hooks/stop.py",
         "timeout": 5,
         "loop_limit": 1
       }

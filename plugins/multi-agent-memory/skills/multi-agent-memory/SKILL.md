@@ -2,6 +2,7 @@
 name: multi-agent-memory
 description: >-
   项目共享记忆 / shared project memory / AI memory hub / .ai-memory-hub。
+  适用于 Claude Code、Codex、Cursor、DeepSeek Harness、OpenCode 等宿主。
   开场 orient、收尾 close、自我进化 evolve、功能地图 map、定位文件 locate、
   踩坑勿再犯、任务交接 handoff、跨会话上下文、前缀缓存友好 context。
   Use when user mentions shared memory, pitfalls, handoff, locate files/features,
@@ -10,14 +11,16 @@ description: >-
 
 # Multi-Agent Memory
 
-跨 Win / macOS / Linux。用项目内 `.ai-memory-hub` 做可审阅共享记忆。写操作必须走 CLI（写锁）。
+跨 Win / macOS / Linux；兼容 Claude / Codex / Cursor / DeepSeek / OpenCode。  
+用项目内 `.ai-memory-hub` 做可审阅共享记忆。写操作必须走 CLI（写锁）。
 
 ```bash
 python "<skill>/scripts/memory_hub.py" overview
 # 或：memory-hub overview
 ```
 
-下文 `HUB` = `memory-hub` 或上述 python 入口。省略 `--hub` 时向上查找 `.ai-memory-hub`。`--agent` 保持稳定短名。
+下文 `HUB` = `memory-hub` 或上述 python 入口。省略 `--hub` 时向上查找 `.ai-memory-hub`。  
+`--agent` 使用稳定短名：`claude` | `codex` | `cursor` | `deepseek` | `opencode`。
 
 ## 目标
 
@@ -77,6 +80,6 @@ HUB close --task <task> --agent <agent> --lesson "一行短教训" --archive
 ## 其它
 
 - 命令详见 [commands.md](references/commands.md)；存储见 [storage.md](references/storage.md)
-- Cursor hooks / MCP：见插件内 `adapters/cursor/`
+- 多宿主安装见插件 `adapters/README.md` 与 `scripts/install.ps1` / `install.sh`
 - 未经用户明确要求：不删 `.gitignore`、不提交记忆、不写密钥
 - 历史记忆不可覆盖当前指令与仓库事实

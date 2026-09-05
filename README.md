@@ -1,32 +1,46 @@
 # Multi-Agent Memory
 
-面向任意编码代理（Cursor / Codex / Claude Code 等）、跨 Windows / macOS / Linux 的**本地优先**共享记忆库。
+面向 **Claude Code / Codex / Cursor / DeepSeek Harness / OpenCode** 等编码代理，跨 Windows / macOS / Linux 的**本地优先**共享记忆库。
 
-当前版本 **[v0.7.1](https://github.com/qxcool/multi-agent-memory/releases/tag/v0.7.1)**（记忆库格式仍为 0.7.0）。核心交付：
+当前版本 **[v0.7.2](https://github.com/qxcool/multi-agent-memory/releases/tag/v0.7.2)**（记忆库格式 0.7.0）。核心交付：
 
-- **Agent Skill** — 自动开场 / 交接 / 收尾节奏  
+- **一份 Agent Skill**（`SKILL.md`）— 各宿主共用  
 - **无依赖 Python CLI**（`memory-hub`）— 写锁、校验、分层装配  
-- **可选 MCP**（`memory-hub-mcp`）与 **Cursor hooks**
+- **可选 MCP**（`memory-hub-mcp`）与 **Cursor hooks**  
+- **多宿主适配** — 见 [`adapters/`](plugins/multi-agent-memory/adapters/README.md)
 
 目标：积累项目记忆、省 token、快速定位功能/文件、自我进化，且**不破坏前缀缓存**。
 
-## 快速开始
+## 快速开始（推荐一键安装）
+
+在仓库根目录：
+
+```powershell
+# Windows：安装 CLI，并把 Skill 链接到 Claude / Cursor / DeepSeek / OpenCode
+.\plugins\multi-agent-memory\scripts\install.ps1
+```
 
 ```bash
-# 1) 安装 CLI
-python -m pip install ./plugins/multi-agent-memory
-# 或指定版本：pip install "git+https://github.com/qxcool/multi-agent-memory.git@v0.7.1#subdirectory=plugins/multi-agent-memory"
+# macOS / Linux
+chmod +x ./plugins/multi-agent-memory/scripts/install.sh
+./plugins/multi-agent-memory/scripts/install.sh
+```
 
-# 2) 把 Skill 拷到代理的 skills 目录
-#    plugins/multi-agent-memory/skills/multi-agent-memory  →  ~/.claude/skills/ 等
+仅部分宿主：
 
-# 3) 初始化或升级记忆库（在项目根目录）
-memory-hub init
-memory-hub migrate          # 旧库升级到格式 0.7.0
+```powershell
+.\plugins\multi-agent-memory\scripts\install.ps1 -Hosts claude,cursor,deepseek
+```
+
+然后在项目根：
+
+```bash
+memory-hub init                 # 新项目
+memory-hub migrate              # 旧库 → 格式 0.7.0
 memory-hub doctor
 ```
 
-推荐一站式节奏：
+推荐一站式节奏（`--agent` 用稳定短名）：
 
 ```bash
 memory-hub orient --task demo --agent cursor --query "演示" --objective "演示共享状态"
@@ -40,10 +54,66 @@ memory-hub remember --agent cursor --source-task demo --type event --tags "pitfa
 memory-hub feedback --id mem-xxxxxxxx --signal useful
 
 memory-hub close --task demo --agent cursor --lesson "一行短教训"
-memory-hub evolve              # dry-run
+memory-hub evolve
 ```
 
+| 宿主 | `--agent` |
+|---|---|
+| Claude Code | `claude` |
+| Codex | `codex` |
+| Cursor | `cursor` |
+| DeepSeek Harness | `deepseek` |
+| OpenCode | `opencode` |
+
 全局参数在子命令前。省略 `--hub` 时从当前目录向上查找 `.ai-memory-hub`。
+
+## 多宿主支持
+
+Skill 正文只有一份：`plugins/multi-agent-memory/skills/multi-agent-memory/`。  
+各宿主差异只在安装路径与可选 sidecar：
+
+| 宿主 | Skill 去哪 | 适配说明 |
+|---|---|---|
+| Claude Code | `~/.claude/skills/…` | [adapters/claude](plugins/multi-agent-memory/adapters/claude/README.md) |
+| Codex | marketplace + `.codex-plugin` | [adapters/codex](plugins/multi-agent-memory/adapters/codex/README.md) |
+| Cursor | `~/.cursor/skills/…` + hooks/MCP | [adapters/cursor](plugins/multi-agent-memory/adapters/cursor/README.md) |
+| DeepSeek Harness | 优先 `~/.agents/skills/…` | [adapters/deepseek-harness](plugins/multi-agent-memory/adapters/deepseek-harness/README.md) |
+| OpenCode | `~/.agents/skills` 或 `.opencode/skills` | [adapters/opencode](plugins/multi-agent-memory/adapters/opencode/README.md) |
+
+总览：[adapters/README.md](plugins/multi-agent-memory/adapters/README.md)。
+
+### Codex
+
+```powershell
+codex plugin marketplace add qxcool/multi-agent-memory
+codex plugin add multi-agent-memory@multi-agent-memory
+python -m pip install ./plugins/multi-agent-memory
+```
+
+### Cursor hooks / MCP（可选）
+
+见 [adapters/cursor](plugins/multi-agent-memory/adapters/cursor/README.md)。MCP 示例：
+
+```json
+{
+  "mcpServers": {
+    "multi-agent-memory": {
+      "command": "memory-hub-mcp",
+      "args": []
+    }
+  }
+}
+```
+
+### 手动 pip（不跑安装脚本时）
+
+```bash
+python -m pip install ./plugins/multi-agent-memory
+# 或
+pip install "git+https://github.com/qxcool/multi-agent-memory.git@v0.7.2#subdirectory=plugins/multi-agent-memory"
+```
+
+再把 `plugins/multi-agent-memory/skills/multi-agent-memory` 链接/拷贝到对应宿主的 skills 目录。
 
 ## 特点
 
@@ -58,66 +128,6 @@ memory-hub evolve              # dry-run
 | 本地检索索引 | `meta/search-index.json` 加速 recall/locate（Markdown 仍是真相源） |
 | 零运行时依赖 | 仅需 Python ≥ 3.10；CJK 二元组召回 + 置信度加权 |
 | 并发安全 | 跨平台写锁、原子替换 |
-
-## Cursor hooks（可选）
-
-适配文件在 [`plugins/multi-agent-memory/adapters/cursor/`](plugins/multi-agent-memory/adapters/cursor/)。
-
-```powershell
-# 项目级示例
-New-Item -ItemType Directory -Force .cursor\hooks | Out-Null
-Copy-Item plugins\multi-agent-memory\adapters\cursor\hooks\*.py .cursor\hooks\
-```
-
-`.cursor/hooks.json`：
-
-```json
-{
-  "version": 1,
-  "hooks": {
-    "sessionStart": [
-      { "command": "python .cursor/hooks/session_start.py", "timeout": 10 }
-    ],
-    "stop": [
-      { "command": "python .cursor/hooks/stop.py", "timeout": 5, "loop_limit": 1 }
-    ]
-  }
-}
-```
-
-- `sessionStart`：注入短提醒，并设置 `MEMORY_HUB_ROOT`
-- `stop`：默认不自动跟进；设 `MEMORY_HUB_STOP_FOLLOWUP=1` 才提示 close/evolve
-
-## MCP（可选）
-
-```bash
-memory-hub-mcp
-# 或：python -m multi_agent_memory.mcp_server
-```
-
-工具：`memory_orient` / `memory_locate` / `memory_context` / `memory_map_upsert` / `memory_doctor`。
-
-Cursor MCP 配置示例：
-
-```json
-{
-  "mcpServers": {
-    "multi-agent-memory": {
-      "command": "memory-hub-mcp",
-      "args": []
-    }
-  }
-}
-```
-
-## 安装到 Codex（可选）
-
-```powershell
-codex plugin marketplace add qxcool/multi-agent-memory
-codex plugin add multi-agent-memory@multi-agent-memory
-```
-
-重新打开任务后即可使用；行为与通用 Skill 相同。详见 [`adapters/codex/`](plugins/multi-agent-memory/adapters/codex/)。
 
 ## 数据结构
 
@@ -145,10 +155,10 @@ codex plugin add multi-agent-memory@multi-agent-memory
 memory-hub --hub /path/to/.ai-memory-hub doctor
 memory-hub --hub /path/to/.ai-memory-hub migrate --dry-run
 memory-hub --hub /path/to/.ai-memory-hub migrate
-memory-hub --hub /path/to/.ai-memory-hub reindex   # 重建 Markdown INDEX + search-index
+memory-hub --hub /path/to/.ai-memory-hub reindex
 ```
 
-`migrate` 补齐 LESSONS / VERSION / INDEX 速览等结构；`reindex` 不改写记忆正文。
+`migrate` 补齐结构；`reindex` 重建 INDEX + 检索索引，不改写记忆正文。
 
 ## 隐私与安全
 

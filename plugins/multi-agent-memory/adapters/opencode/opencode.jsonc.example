@@ -1,0 +1,10 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "multi-agent-memory": {
+      "type": "local",
+      "command": ["memory-hub-mcp"],
+      "enabled": true
+    }
+  }
+}

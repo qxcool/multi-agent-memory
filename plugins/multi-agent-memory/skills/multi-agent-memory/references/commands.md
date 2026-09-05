@@ -84,3 +84,16 @@ memory-hub-mcp
 ```
 
 工具：`memory_orient` / `memory_locate` / `memory_context` / `memory_map_upsert` / `memory_doctor`。
+
+## 多宿主安装
+
+见插件 [`adapters/README.md`](../../adapters/README.md) 与：
+
+```bash
+# Windows
+..\..\scripts\install.ps1
+# Unix
+../../scripts/install.sh
+```
+
+`--agent` 短名：`claude` | `codex` | `cursor` | `deepseek` | `opencode`。
