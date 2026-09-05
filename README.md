@@ -15,6 +15,15 @@
 - 并发安全：跨平台写锁、同目录临时文件和原子替换。
 - 旧版兼容：支持原 `memory_hub.py` 的 `recall`、`status`、`remember`、`reindex` 和 `archive` 调用。
 - 零运行时依赖：仅需 Python 3.10 或更高版本。
+- 中文友好召回：无空格中文查询按字二元组匹配，并对 `confirmed` / `inferred` 置信度加权。
+- 增量索引：写入只刷新受影响集合的 INDEX，全量 `reindex` 仍可用。
+- 功能地图：`map upsert` / `locate` / `map list` 快速定位职责与关联文件，减少每次扫仓库。
+- 自我进化：`feedback useful|stale|wrong` 巩固或降权记忆。
+- 前缀缓存友好：固定 `status --query`、context 稳定装配、默认排除 auto-summary。
+- 一站式闭环：`orient` 开场、`close` 收尾、`evolve` 自我进化扫描。
+- 本地检索索引：`meta/search-index.json` 加速 recall/locate（Markdown 仍是真相源）。
+- 可选 MCP：`memory-hub-mcp` 暴露 orient/locate/context/map/doctor。
+- Cursor hooks 适配：`adapters/cursor/`（sessionStart 提醒；stop 可选跟进）。
 
 ## 作为通用 Skill 使用
 
@@ -39,14 +48,15 @@ python plugins/multi-agent-memory/scripts/memory_hub.py doctor
 常用命令：
 
 ```bash
-memory-hub overview
-memory-hub list sessions
-memory-hub context --query "演示" --token-budget 2048 --core-budget 2000
-memory-hub status --task demo --agent cursor --objective "演示共享状态" --state in-progress \
-  --append-completed --completed "初始化完成" --next "继续实现" --blocker "无"
+memory-hub orient --task demo --agent cursor --query "演示" --objective "演示共享状态"
+memory-hub map upsert --agent cursor --feature demo --role "演示入口" --path "README.md"
+memory-hub locate --query "演示"
+memory-hub map list
+memory-hub evolve
 memory-hub remember --agent cursor --source-task demo --type event --tags "pitfall,lesson" \
-  --text "现象 → 原因 → 做法 → 勿再犯"
-memory-hub distill --task demo --agent cursor --lesson "一行短教训"
+  --key "pitfall:demo" --text "现象 → 原因 → 做法 → 勿再犯"
+memory-hub feedback --id mem-xxxxxxxx --signal useful
+memory-hub close --task demo --agent cursor --lesson "一行短教训"
 memory-hub stats
 ```
 
@@ -69,6 +79,7 @@ codex plugin add multi-agent-memory@multi-agent-memory
 ├── wiki/          项目知识
 ├── inbox/         候选
 ├── archive/       归档与 forgotten/
+├── meta/          侧车检索索引（可再生）
 └── INDEX.md       总索引 + 活动任务速览
 ```
 

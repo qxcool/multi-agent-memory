@@ -8,6 +8,7 @@ from typing import Any, Sequence
 
 from .hub import (
     CONFIDENCE_LEVELS,
+    FEEDBACK_SIGNALS,
     LIST_COLLECTIONS,
     MEMORY_TYPES,
     PROMOTE_TARGETS,
@@ -71,6 +72,10 @@ def _parser() -> argparse.ArgumentParser:
     status.add_argument("--next", dest="next_step")
     status.add_argument("--blocker")
     status.add_argument("--steps")
+    status.add_argument(
+        "--query",
+        help="固定本任务 context/locate 检索词（写入 status，利于前缀缓存）",
+    )
 
     remember = subparsers.add_parser("remember", help="把一条候选记忆写入 inbox")
     remember.add_argument("--agent", required=True)
@@ -116,7 +121,52 @@ def _parser() -> argparse.ArgumentParser:
     )
     context.add_argument("--include-user", action="store_true", help="将 USER.md 纳入 L0")
     context.add_argument("--include-agents", action="store_true", help="将 AGENTS.md 纳入 L0")
+    context.add_argument(
+        "--no-maps",
+        action="store_true",
+        help="不装配 L0.5 功能地图（默认会按 query locate 并稳定排序）",
+    )
+    context.add_argument(
+        "--map-budget",
+        type=int,
+        default=1200,
+        help="L0.5 功能地图字符上限，默认 1200",
+    )
+    context.add_argument("--map-limit", type=int, default=5, help="L0.5 最多条数，默认 5")
+    context.add_argument(
+        "--include-inferred",
+        action="store_true",
+        help="L2 包含 auto-summary/retrospective（默认排除，减少噪声与前缀抖动）",
+    )
+    context.add_argument("--task", help="可选：在末尾附加该任务 status（L1，不挤占前缀）")
+    context.add_argument("--agent", help="与 --task 联用，指定代理 status")
     _add_recall_filters(context)
+
+    orient = subparsers.add_parser("orient", help="开场一站式：status+固定检索词+缓存友好 context")
+    orient.add_argument("--task", required=True)
+    orient.add_argument("--agent", required=True)
+    orient.add_argument("--query", required=True, help="固定检索词（同任务必须复用）")
+    orient.add_argument("--objective")
+    orient.add_argument("--state", default="in-progress")
+    orient.add_argument("--token-budget", type=int, default=2048)
+    orient.add_argument("--core-budget", type=int, default=2000)
+    orient.add_argument("--map-budget", type=int, default=1200)
+    orient.add_argument("--include-user", action="store_true")
+    orient.add_argument("--include-agents", action="store_true")
+    orient.add_argument("--no-maps", action="store_true")
+    orient.add_argument("--include-inferred", action="store_true")
+    orient.add_argument("--auto-migrate", action="store_true", help="若 doctor 提示落后则自动 migrate")
+
+    close = subparsers.add_parser("close", help="收尾一站式：completed + distill + 可选 archive")
+    close.add_argument("--task", required=True)
+    close.add_argument("--agent", required=True)
+    close.add_argument("--lesson")
+    close.add_argument("--pin-core", action="store_true")
+    close.add_argument("--no-promote-inbox", action="store_true")
+    close.add_argument("--archive", action="store_true", help="distill 后归档任务")
+
+    evolve = subparsers.add_parser("evolve", help="自我进化扫描（默认 dry-run；--apply 写入）")
+    evolve.add_argument("--apply", action="store_true", help="执行 mark_stale / confirm 等写操作")
 
     distill = subparsers.add_parser(
         "distill",
@@ -138,6 +188,46 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="不自动把本任务 source_task 的 inbox 晋升到 experiences",
     )
+
+    map_parser = subparsers.add_parser("map", help="维护功能/文件地图（减少每次扫仓库）")
+    map_sub = map_parser.add_subparsers(dest="map_command", required=True)
+    map_upsert = map_sub.add_parser("upsert", help="创建或更新 feature 地图（写入 wiki）")
+    map_upsert.add_argument("--agent", required=True)
+    map_upsert.add_argument("--feature", required=True, help="功能名；自动变为 key=feature:<名>")
+    map_upsert.add_argument("--role", default="", help="一句话职责")
+    map_upsert.add_argument(
+        "--path",
+        dest="paths",
+        action="append",
+        default=[],
+        help="关联仓库相对路径，可重复传入",
+    )
+    map_upsert.add_argument(
+        "--command",
+        dest="commands",
+        action="append",
+        default=[],
+        help="相关命令，可重复传入",
+    )
+    map_upsert.add_argument("--note", default="", help="补充说明")
+    map_upsert.add_argument("--source-task")
+    map_upsert.add_argument("--confidence", choices=sorted(CONFIDENCE_LEVELS), default="confirmed")
+    map_upsert.add_argument(
+        "--replace-paths",
+        action="store_true",
+        help="用本次 --path 完全替换旧路径（默认合并去重）",
+    )
+    map_sub.add_parser("list", help="列出功能地图（按 key 稳定排序）")
+
+    locate = subparsers.add_parser("locate", help="按功能/路径线索定位地图（短结果）")
+    locate.add_argument("--query", required=True)
+    locate.add_argument("--limit", type=int, default=5)
+    locate.add_argument("--min-score", type=int, default=1)
+
+    feedback = subparsers.add_parser("feedback", help="对记忆投票（useful/stale/wrong）以自我进化")
+    feedback.add_argument("--signal", required=True, choices=sorted(FEEDBACK_SIGNALS))
+    feedback.add_argument("--id", dest="memory_id")
+    feedback.add_argument("--path")
 
     listing = subparsers.add_parser("list", help="列出集合内容供发现与交接")
     listing.add_argument("collection", choices=sorted(LIST_COLLECTIONS))
@@ -174,11 +264,50 @@ def _status_is_read_only(args: argparse.Namespace) -> bool:
             args.next_step is not None,
             args.blocker is not None,
             args.steps is not None,
+            args.query is not None,
         ]
     )
 
 
 def _print_human(command: str, result: Any) -> None:
+    if command == "locate":
+        if not result:
+            print("未找到匹配地图/记忆")
+            return
+        for item in result:
+            paths = "；".join(item.get("paths") or []) or "（无路径）"
+            commands = "；".join(item.get("commands") or []) or "（无）"
+            print(
+                f"[{item.get('score')}] {item.get('feature') or item.get('key') or item.get('path')}\n"
+                f"职责：{item.get('role') or '（未填写）'}\n"
+                f"路径：{paths}\n"
+                f"命令：{commands}\n"
+                f"文件：{item.get('path')}  置信度：{item.get('confidence')}\n"
+            )
+            missing = item.get("missing_paths") or []
+            if missing:
+                print(f"失效路径：{'；'.join(str(path) for path in missing)}\n")
+        return
+    if command == "orient" and isinstance(result, dict):
+        print(result.get("context", ""))
+        return
+    if command == "evolve" and isinstance(result, dict):
+        print(f"apply: {result.get('apply')}  counts: {result.get('counts')}")
+        for item in result.get("planned") or []:
+            print(f"- {item.get('action')}: {item.get('feature')} — {item.get('reason')}")
+        return
+    if command == "map" and isinstance(result, list):
+        if not result:
+            print("（无功能地图）")
+            return
+        for item in result:
+            paths = "；".join(item.get("paths") or []) or "（无）"
+            print(
+                f"{item.get('feature')}: {item.get('role') or '（未填写）'}\n"
+                f"  路径：{paths}\n"
+                f"  文件：{item.get('path')}  key：{item.get('key')}\n"
+            )
+        return
     if command == "recall":
         if not result:
             print("未找到匹配记忆")
@@ -255,6 +384,7 @@ def run(argv: Sequence[str] | None = None) -> int:
                     next_step=args.next_step,
                     blocker=args.blocker,
                     steps=args.steps,
+                    query=args.query,
                     append_completed=args.append_completed,
                 )
         elif args.command == "remember":
@@ -300,7 +430,40 @@ def run(argv: Sequence[str] | None = None) -> int:
                 core_budget=args.core_budget,
                 include_user=args.include_user,
                 include_agents=args.include_agents,
+                include_maps=not args.no_maps,
+                map_budget=args.map_budget,
+                map_limit=args.map_limit,
+                include_inferred=args.include_inferred,
+                session_task=args.task,
+                session_agent=args.agent,
             )
+        elif args.command == "orient":
+            result = hub.orient(
+                task=args.task,
+                agent=args.agent,
+                query=args.query,
+                objective=args.objective,
+                state=args.state,
+                token_budget=args.token_budget,
+                core_budget=args.core_budget,
+                map_budget=args.map_budget,
+                include_user=args.include_user,
+                include_agents=args.include_agents,
+                include_maps=not args.no_maps,
+                include_inferred=args.include_inferred,
+                auto_migrate=args.auto_migrate,
+            )
+        elif args.command == "close":
+            result = hub.close(
+                task=args.task,
+                agent=args.agent,
+                lesson=args.lesson,
+                pin_core=args.pin_core,
+                promote_inbox=not args.no_promote_inbox,
+                do_archive=args.archive,
+            )
+        elif args.command == "evolve":
+            result = hub.evolve(apply=args.apply)
         elif args.command == "distill":
             result = hub.distill(
                 task=args.task,
@@ -309,6 +472,27 @@ def run(argv: Sequence[str] | None = None) -> int:
                 promote_inbox=not args.no_promote_inbox,
                 pin_core=args.pin_core,
             )
+        elif args.command == "map":
+            if args.map_command == "upsert":
+                result = hub.upsert_map(
+                    agent=args.agent,
+                    feature=args.feature,
+                    role=args.role,
+                    paths=args.paths,
+                    commands=args.commands,
+                    note=args.note,
+                    source_task=args.source_task,
+                    confidence=args.confidence,
+                    merge_paths=not args.replace_paths,
+                )
+            elif args.map_command == "list":
+                result = hub.list_maps()
+            else:
+                raise MemoryHubError(f"未知 map 子命令：{args.map_command}")
+        elif args.command == "locate":
+            result = hub.locate(args.query, limit=args.limit, min_score=args.min_score)
+        elif args.command == "feedback":
+            result = hub.feedback(signal=args.signal, memory_id=args.memory_id, path=args.path)
         elif args.command == "list":
             result = hub.list_entries(
                 args.collection,

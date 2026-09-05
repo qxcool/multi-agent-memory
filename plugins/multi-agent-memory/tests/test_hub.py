@@ -31,7 +31,7 @@ class MemoryHubTests(unittest.TestCase):
         self.assertTrue((self.root / "memory" / "LESSONS.md").exists())
         self.assertEqual("*\n!.gitignore\n", (self.root / ".gitignore").read_text(encoding="utf-8"))
         self.assertIn("AI Memory Hub", (self.root / "INDEX.md").read_text(encoding="utf-8"))
-        self.assertEqual("0.4.3", (self.root / "VERSION").read_text(encoding="utf-8").strip())
+        self.assertEqual("0.7.0", (self.root / "VERSION").read_text(encoding="utf-8").strip())
 
     def test_migrate_upgrades_legacy_hub_structure(self) -> None:
         legacy_root = Path(self.temp.name) / "legacy-hub"
@@ -54,7 +54,7 @@ class MemoryHubTests(unittest.TestCase):
         result = hub.migrate(backfill_hash=True)
         self.assertFalse(result["dry_run"])
         self.assertTrue((legacy_root / "memory" / "LESSONS.md").exists())
-        self.assertEqual("0.4.3", (legacy_root / "VERSION").read_text(encoding="utf-8").strip())
+        self.assertEqual("0.7.0", (legacy_root / "VERSION").read_text(encoding="utf-8").strip())
         self.assertIn("活动任务速览", (legacy_root / "INDEX.md").read_text(encoding="utf-8"))
         self.assertIn("inbox/note.md", result["hashed"])
         meta, _ = __import__("multi_agent_memory.hub", fromlist=["_split_frontmatter"])._split_frontmatter(
@@ -425,6 +425,125 @@ class MemoryHubTests(unittest.TestCase):
         self.assertGreater(alpha_at, 0)
         self.assertGreater(zebra_at, 0)
         self.assertLess(alpha_at, zebra_at)
+        self.assertIn("L0.5 功能地图", first)
+        self.assertNotIn("分数：", first)
+        self.assertNotIn("高置信度加分", first)
+
+    def test_context_stays_stable_after_feedback(self) -> None:
+        mapped = self.hub.upsert_map(
+            agent="cursor",
+            feature="cache-prefix",
+            role="前缀缓存友好地图",
+            paths=["plugins/multi-agent-memory/src/multi_agent_memory/hub.py"],
+            note="稳定装配",
+        )
+        before = self.hub.context(query="前缀缓存", max_chars=8000)
+        self.hub.feedback(signal="useful", memory_id=str(mapped["id"]))
+        self.hub.feedback(signal="useful", memory_id=str(mapped["id"]))
+        after = self.hub.context(query="前缀缓存", max_chars=8000)
+        self.assertEqual(before, after)
+        self.assertIn("L0.5 功能地图", before)
+        self.assertIn("cache-prefix", before)
+
+    def test_status_pins_query_for_cache(self) -> None:
+        result = self.hub.update_status(
+            task="opt-task",
+            agent="cursor",
+            objective="优化缓存",
+            query="memory-hub context",
+        )
+        self.assertEqual("memory-hub context", result["query"])
+        shown = self.hub.get_status(task="opt-task", agent="cursor")
+        self.assertEqual("memory-hub context", shown["query"])
+        content = Path(result["path"]).read_text(encoding="utf-8")
+        self.assertIn("- 检索词：memory-hub context", content)
+
+    def test_context_skips_auto_summary_by_default(self) -> None:
+        self.hub.update_status(task="sum-task", agent="cursor", objective="总结", state="completed", completed=["ok"])
+        distilled = self.hub.distill(task="sum-task", agent="cursor")
+        path = str(distilled["retrospective"]).replace("\\", "/")
+        default_ctx = self.hub.context(query="总结", max_chars=8000, include_maps=False)
+        self.assertNotIn(path, default_ctx)
+        with_inferred = self.hub.context(
+            query="总结",
+            max_chars=8000,
+            include_maps=False,
+            include_inferred=True,
+        )
+        self.assertIn(path, with_inferred)
+
+    def test_doctor_warns_about_missing_map_paths(self) -> None:
+        self.hub.upsert_map(
+            agent="cursor",
+            feature="broken-map",
+            role="失效路径",
+            paths=["does/not/exist/anywhere.py"],
+        )
+        report = self.hub.doctor()
+        self.assertTrue(report["ok"])
+        self.assertTrue(any("broken-map" in warning and "失效" in warning for warning in report["warnings"]))
+
+    def test_map_list_is_stable_by_key(self) -> None:
+        self.hub.upsert_map(agent="cursor", feature="zeta", role="z", paths=["README.md"])
+        self.hub.upsert_map(agent="cursor", feature="alpha", role="a", paths=["LICENSE"])
+        listed = self.hub.list_maps()
+        features = [item["feature"] for item in listed]
+        self.assertEqual(["alpha", "zeta"], features)
+
+    def test_orient_close_and_evolve_lifecycle(self) -> None:
+        opened = self.hub.orient(
+            task="life",
+            agent="cursor",
+            query="lifecycle-cache",
+            objective="打通开场收尾",
+        )
+        self.assertEqual("lifecycle-cache", opened["query"])
+        self.assertIn("共享记忆上下文", opened["context"])
+        self.assertIn("L1 当前任务", opened["context"])
+        self.assertEqual("lifecycle-cache", opened["status"]["query"])
+
+        self.hub.upsert_map(
+            agent="cursor",
+            feature="ghost",
+            role="失效",
+            paths=["no/such/file.py"],
+        )
+        plan = self.hub.evolve(apply=False)
+        self.assertTrue(any(item["action"] == "mark_stale" and item["feature"] == "ghost" for item in plan["planned"]))
+        applied = self.hub.evolve(apply=True)
+        self.assertGreaterEqual(applied["counts"]["applied"], 1)
+        maps = {item["feature"]: item for item in self.hub.list_maps()}
+        self.assertIn("stale", {tag.casefold() for tag in maps["ghost"]["tags"]})
+
+        located = self.hub.locate("ghost")
+        self.assertTrue(located)
+        self.assertIn("no/such/file.py", located[0]["missing_paths"])
+
+        closed = self.hub.close(task="life", agent="cursor", lesson="开场用 orient，收尾用 close")
+        self.assertEqual("completed", closed["status"]["state"])
+        self.assertTrue(closed["distill"]["lessons_updated"])
+        self.assertIsNone(closed["archive"])
+
+    def test_context_session_trailer_does_not_reorder_prefix(self) -> None:
+        self.hub.upsert_map(
+            agent="cursor",
+            feature="prefix-stable",
+            role="前缀",
+            paths=["README.md"],
+        )
+        self.hub.update_status(task="trail", agent="cursor", objective="尾部", query="prefix-stable")
+        first = self.hub.context(query="prefix-stable", max_chars=6000)
+        second = self.hub.context(
+            query="prefix-stable",
+            max_chars=6000,
+            session_task="trail",
+            session_agent="cursor",
+        )
+        # 有 L1 时正文更长，但 L0/L0.5 前缀应保持一致
+        cut = first.find("## L0.5") if "## L0.5" in first else len(first)
+        self.assertTrue(second.startswith(first[:cut]))
+        self.assertIn("L1 当前任务", second)
+        self.assertGreater(second.find("L1 当前任务"), second.find("L0.5 功能地图"))
 
     def test_stats_reports_metadata_coverage_types_and_relations(self) -> None:
         self.hub.remember(
@@ -453,6 +572,160 @@ class MemoryHubTests(unittest.TestCase):
         self.assertTrue(report["ok"])
         self.assertEqual(0.0, report["stats"]["metadata_coverage"])
         self.assertTrue(any("结构化元数据" in warning for warning in report["warnings"]))
+
+    def test_tokenize_query_splits_cjk_bigrams_and_latin(self) -> None:
+        from multi_agent_memory.hub import _tokenize_query
+
+        self.assertEqual(["认证", "证刷", "刷新"], _tokenize_query("认证刷新"))
+        self.assertEqual(["auth", "刷新"], _tokenize_query("auth刷新"))
+        self.assertEqual(["车型", "分享"], _tokenize_query("车型 分享"))
+
+    def test_recall_matches_cjk_without_spaces(self) -> None:
+        self.hub.remember(
+            agent="cursor",
+            text="认证服务必须复用单例刷新请求，禁止并行重入",
+            memory_type="decision",
+            confidence="confirmed",
+        )
+        # 无空格查询：旧版整词匹配会失败，二元组应命中「认证」「刷新」
+        results = self.hub.recall("认证刷新", limit=5)
+        self.assertTrue(results)
+        self.assertIn("认证", results[0].snippet or results[0].title)
+        self.assertIn("高置信度加分", results[0].reason)
+
+    def test_recall_confidence_prefers_confirmed_over_inferred(self) -> None:
+        self.hub.remember(
+            agent="cursor",
+            text="缓存键必须包含租户 ID",
+            memory_type="decision",
+            confidence="inferred",
+            key="cache:tenant-inferred",
+        )
+        confirmed = self.hub.remember(
+            agent="cursor",
+            text="缓存键必须包含租户 ID 且经确认",
+            memory_type="decision",
+            confidence="confirmed",
+            key="cache:tenant-confirmed",
+        )
+        ranked = self.hub.recall("缓存键 租户", limit=5)
+        self.assertGreaterEqual(len(ranked), 2)
+        self.assertEqual(confirmed["id"], ranked[0].memory_id)
+        self.assertIn("高置信度加分", ranked[0].reason)
+        inferred = next(item for item in ranked if item.key == "cache:tenant-inferred")
+        self.assertIn("推断性降权", inferred.reason)
+        self.assertGreater(ranked[0].score, inferred.score)
+
+    def test_remember_touches_only_inbox_index(self) -> None:
+        wiki_index = self.root / "wiki" / "INDEX.md"
+        experiences_index = self.root / "experiences" / "INDEX.md"
+        before_wiki = wiki_index.read_text(encoding="utf-8")
+        before_exp = experiences_index.read_text(encoding="utf-8")
+        wiki_mtime = wiki_index.stat().st_mtime_ns
+        exp_mtime = experiences_index.stat().st_mtime_ns
+
+        self.hub.remember(agent="cursor", text="仅应刷新 inbox 索引")
+
+        self.assertEqual(before_wiki, wiki_index.read_text(encoding="utf-8"))
+        self.assertEqual(before_exp, experiences_index.read_text(encoding="utf-8"))
+        self.assertEqual(wiki_mtime, wiki_index.stat().st_mtime_ns)
+        self.assertEqual(exp_mtime, experiences_index.stat().st_mtime_ns)
+        inbox_index = (self.root / "inbox" / "INDEX.md").read_text(encoding="utf-8")
+        self.assertIn("仅应刷新-inbox-索引", inbox_index)
+        self.assertRegex((self.root / "INDEX.md").read_text(encoding="utf-8"), r"inbox/INDEX\.md\): 1 entries")
+
+    def test_doctor_warns_when_completed_task_missing_distill(self) -> None:
+        self.hub.update_status(
+            task="orphan-done",
+            agent="cursor",
+            objective="已完成未 distill",
+            state="completed",
+        )
+        report = self.hub.doctor()
+        self.assertTrue(report["ok"])
+        self.assertTrue(any("orphan-done/cursor" in warning and "distill" in warning for warning in report["warnings"]))
+
+    def test_map_upsert_and_locate_return_short_paths(self) -> None:
+        first = self.hub.upsert_map(
+            agent="cursor",
+            feature="auth-refresh",
+            role="登录态刷新",
+            paths=["src/auth/refresh.ts"],
+            commands=["npm test -- auth"],
+            note="单例 Promise",
+        )
+        self.assertTrue(str(first["path"]).replace("\\", "/").endswith(".md"))
+        self.assertIn("wiki", str(first["path"]).replace("\\", "/"))
+        self.assertEqual("feature:auth-refresh", first["key"])
+        self.assertEqual(["src/auth/refresh.ts"], first["paths"])
+
+        second = self.hub.upsert_map(
+            agent="cursor",
+            feature="auth-refresh",
+            paths=["src/auth/client.ts"],
+            role="登录态刷新与客户端",
+        )
+        self.assertTrue(second["updated"])
+        self.assertEqual(
+            ["src/auth/refresh.ts", "src/auth/client.ts"],
+            second["paths"],
+        )
+
+        by_feature = self.hub.locate("认证刷新")
+        self.assertTrue(by_feature)
+        self.assertEqual("auth-refresh", by_feature[0]["feature"])
+        self.assertIn("src/auth/client.ts", by_feature[0]["paths"])
+
+        by_path = self.hub.locate("src/auth/refresh.ts")
+        self.assertTrue(by_path)
+        self.assertEqual(first["id"], by_path[0]["memory_id"])
+
+    def test_feedback_useful_promotes_confidence(self) -> None:
+        remembered = self.hub.remember(
+            agent="cursor",
+            text="地图命中后应优先打开关联路径",
+            confidence="inferred",
+            memory_type="fact",
+        )
+        once = self.hub.feedback(signal="useful", memory_id=str(remembered["id"]))
+        self.assertEqual(1, once["feedback_useful"])
+        self.assertEqual("inferred", once["confidence"])
+        twice = self.hub.feedback(signal="useful", memory_id=str(remembered["id"]))
+        self.assertEqual(2, twice["feedback_useful"])
+        self.assertEqual("confirmed", twice["confidence"])
+
+        mapped = self.hub.upsert_map(
+            agent="cursor",
+            feature="locate-loop",
+            role="定位闭环",
+            paths=["plugins/multi-agent-memory/src/multi_agent_memory/hub.py"],
+        )
+        stale = self.hub.feedback(signal="stale", memory_id=str(mapped["id"]))
+        self.assertEqual("tentative", stale["confidence"])
+        self.assertIn("stale", stale["tags"])
+
+    def test_cli_map_locate_and_feedback(self) -> None:
+        from multi_agent_memory.cli import run
+
+        code = run(
+            [
+                "--hub",
+                str(self.root),
+                "map",
+                "upsert",
+                "--agent",
+                "cursor",
+                "--feature",
+                "cli-map",
+                "--role",
+                "CLI 地图",
+                "--path",
+                "plugins/multi-agent-memory/src/multi_agent_memory/cli.py",
+            ]
+        )
+        self.assertEqual(0, code)
+        code = run(["--hub", str(self.root), "--json", "locate", "--query", "cli-map"])
+        self.assertEqual(0, code)
 
     def test_archive_moves_task_and_reindexes(self) -> None:
         self.hub.update_status(task="done-task", agent="codex", objective="完成任务", state="completed")

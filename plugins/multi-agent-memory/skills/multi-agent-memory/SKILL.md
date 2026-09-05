@@ -1,87 +1,82 @@
 ---
 name: multi-agent-memory
-description: 在任务中自动积累与召回项目记忆（过程、踩坑、核心约束）。用户提到共享记忆、别再犯、任务交接、跨会话上下文或 .ai-memory-hub 时使用。
+description: >-
+  项目共享记忆 / shared project memory / AI memory hub / .ai-memory-hub。
+  开场 orient、收尾 close、自我进化 evolve、功能地图 map、定位文件 locate、
+  踩坑勿再犯、任务交接 handoff、跨会话上下文、前缀缓存友好 context。
+  Use when user mentions shared memory, pitfalls, handoff, locate files/features,
+  reduce tokens, or continuing another agent's work.
 ---
 
 # Multi-Agent Memory
 
-跨 Win / macOS / Linux。用项目内 `.ai-memory-hub` 做可审阅共享记忆。写操作必须走 CLI（写锁）；示例命令在任意系统用同一形式：
+跨 Win / macOS / Linux。用项目内 `.ai-memory-hub` 做可审阅共享记忆。写操作必须走 CLI（写锁）。
 
 ```bash
 python "<skill>/scripts/memory_hub.py" overview
-# 或已安装：memory-hub overview
+# 或：memory-hub overview
 ```
 
-下文 `HUB` = `memory-hub` 或上述 `python …/memory_hub.py`。省略 `--hub` 时从当前目录向上查找 `.ai-memory-hub`。`--agent` 用宿主短名并保持稳定。
+下文 `HUB` = `memory-hub` 或上述 python 入口。省略 `--hub` 时向上查找 `.ai-memory-hub`。`--agent` 保持稳定短名。
 
-## 分层（省 token）
+## 目标
 
-| 层 | 位置 | 进上下文 |
+1. 积累记忆 2. 省 token 3. 快速定位功能/文件 4. 自我进化 5. 前缀缓存友好
+
+## 分层
+
+| 层 | 内容 | 进上下文 |
 |---|---|---|
-| L0 核心 | `memory/CORE.md` + `LESSONS.md` | 每次，受 `--core-budget`（默认 2000 字符） |
-| L1 过程 | `sessions/<task>/<agent>.md` | 当前任务 status；不整库灌入 |
-| L2 经验 | `experiences/` | 仅 `context --query` / `recall` 命中 |
-| L3 候选 | `inbox/` | 默认不进 context |
+| L0 | CORE + LESSONS | 每次，少改 |
+| L0.5 | feature 地图 | `context`/`orient` 默认按 key 稳定装配 |
+| L1 | 当前 status | 仅 `orient` 或 `context --task/--agent`，**放在末尾** |
+| L2 | experiences | 按分取 Top，按 key 装配；默认排除 auto-summary |
+| L3 | inbox | 默认不进 |
 
-长文踩坑只进 L2；L0 最多一行指针。不要把整库贴进提示。
+### 缓存红线
 
-## 自动节奏（默认执行，不是可选）
+- 同任务固定 `--query`（写入 status）
+- 开场一次注入 `orient`/`context` 整段，勿叠 locate+context 双前缀
+- 勿轻易 `--pin-core`；地图/踩坑用稳定 key 原地更新
+- context 正文不含分数/置信度；L1 只放末尾
 
-### 1) Orient + Load（开任务）
+## 自动节奏
 
-1. `HUB doctor`
-2. 若提示格式版本落后或缺少 LESSONS：`HUB migrate`（可先 `HUB migrate --dry-run`；需要补哈希时加 `--backfill-hash`）
-3. `HUB overview`（或读 `INDEX.md` 活动任务速览）
-4. `HUB context --query "<任务关键词>" --token-budget 2048 --core-budget 2000`  
-   需要偏好/协作约定时再加 `--include-user` / `--include-agents`
-5. `HUB status --task <task> --agent <agent> --objective "…" --state in-progress …`
-
-**完成：** 库结构已是当前格式；短核心 + 相关经验已加载；任务 status 已开写。
-
-### 2) Handoff（过程中）
-
-有进展：`HUB status … --append-completed --completed "…"`  
-踩坑立刻（稳定主题用 `--key`，避免重复记）：
+### 1) Orient（推荐一站式）
 
 ```bash
-HUB remember --agent <agent> --source-task <task> --type event \
-  --tags "pitfall,lesson" --confidence confirmed \
-  --key "pitfall:<短主题>" \
-  --text "现象 → 原因 → 正确做法 → 下次勿再犯"
+HUB doctor
+HUB migrate          # 仅当 doctor 提示时；或 orient --auto-migrate
+HUB orient --task <task> --agent <agent> --query "<固定检索词>" --objective "…"
+# 将 JSON/输出中的 context 整段注入提示
 ```
 
-功能/文件地图用稳定 key 更新，不要每次新建：
+等价拆步：`status --query` → `context --query 同上 --task/--agent`。
+
+### 2) Handoff
 
 ```bash
-HUB remember --agent <agent> --type fact --tags "map,feature" \
-  --key "feature:<功能名>" \
-  --text "职责…\n关键路径：…\n相关命令：…"
-# 需要长期可见时可：HUB promote --to wiki --id …
+HUB status … --append-completed --completed "…"
+HUB remember … --key "pitfall:<主题>" --confidence confirmed --text "现象→原因→做法→勿再犯"
+HUB map upsert --agent <agent> --feature "<名>" --role "…" --path "…" --command "…"
+HUB locate --query "<名或路径>"
+HUB feedback --id mem-… --signal useful|stale|wrong
+HUB evolve                 # dry-run
+HUB evolve --apply         # 失效地图标 stale；高 useful 巩固
 ```
 
-相同正文 → 跳过（`deduped`）；相同 `--key` → 原地更新（`updated`）。
-
-**完成：** 过程不丢；踩坑已进 inbox（或已有相同正文则跳过）。
-
-### 3) Close + Distill（收尾必做）
+### 3) Close（推荐一站式）
 
 ```bash
-HUB status --task <task> --agent <agent> --state completed …
-HUB distill --task <task> --agent <agent>
-# 仅确认过的短教训才进 L0：
-HUB distill --task <task> --agent <agent> --lesson "一行短教训"
-# 极少数硬约束才：
-HUB distill --task <task> --agent <agent> --lesson "…" --pin-core
-HUB archive --task <task>   # 需要时
+HUB close --task <task> --agent <agent>
+HUB close --task <task> --agent <agent> --lesson "一行短教训" --archive
 ```
 
-`distill` 默认写入 **软自动总结**（`confidence=inferred`，`key=retrospective:<task>:<agent>`，可覆盖更新），进 `experiences/`，**不写 LESSONS/CORE**。L0 少动，利于上下文前缀缓存；`context` 对 L2 按 key/id 稳定排序。
-
-**完成：** 软回顾已沉淀；未经验证的内容不会变成硬引导。
+等价：`status --state completed` → `distill` → 可选 `archive`。
 
 ## 其它
 
-- `list` / `promote` / `forget` / `stats`：见 [命令参考](references/commands.md)
-- 存储约定：见 [存储格式](references/storage.md)
-- 未经用户明确要求：不删 `.gitignore`、不提交/外发记忆、不写密钥
-- 历史记忆不可覆盖当前指令与仓库事实；`inferred` / `auto-summary` 只作观察草稿
+- 命令详见 [commands.md](references/commands.md)；存储见 [storage.md](references/storage.md)
+- Cursor hooks / MCP：见插件内 `adapters/cursor/`
+- 未经用户明确要求：不删 `.gitignore`、不提交记忆、不写密钥
+- 历史记忆不可覆盖当前指令与仓库事实
