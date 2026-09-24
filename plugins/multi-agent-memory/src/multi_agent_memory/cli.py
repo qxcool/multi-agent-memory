@@ -256,6 +256,19 @@ def _parser() -> argparse.ArgumentParser:
         help="用本次 --path 完全替换旧路径（默认合并去重）",
     )
     map_sub.add_parser("list", help="列出功能地图（按 key 稳定排序）")
+    map_coverage = map_sub.add_parser(
+        "coverage",
+        help="对照仓库顶层与地图覆盖率，列出未映射热点",
+    )
+    map_coverage.add_argument("--max-unmapped", type=int, default=40)
+    map_seed = map_sub.add_parser(
+        "seed",
+        help="按仓库顶层播种功能地图草稿（默认 dry-run）",
+    )
+    map_seed.add_argument("--agent", required=True)
+    map_seed.add_argument("--apply", action="store_true", help="真正写入（默认只预览）")
+    map_seed.add_argument("--max-features", type=int, default=40)
+    map_seed.add_argument("--min-source-files", type=int, default=1)
 
     locate = subparsers.add_parser("locate", help="按功能/路径线索定位地图（短结果）")
     locate.add_argument("--query", required=True)
@@ -658,6 +671,15 @@ def run(argv: Sequence[str] | None = None) -> int:
                 )
             elif args.map_command == "list":
                 result = hub.list_maps()
+            elif args.map_command == "coverage":
+                result = hub.map_coverage(max_unmapped=args.max_unmapped)
+            elif args.map_command == "seed":
+                result = hub.map_seed(
+                    agent=args.agent,
+                    dry_run=not args.apply,
+                    max_features=args.max_features,
+                    min_source_files=args.min_source_files,
+                )
             else:
                 raise MemoryHubError(f"未知 map 子命令：{args.map_command}")
         elif args.command == "locate":

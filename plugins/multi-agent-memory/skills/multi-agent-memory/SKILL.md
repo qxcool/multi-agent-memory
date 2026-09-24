@@ -60,9 +60,10 @@ HUB --hub "$MEMORY_HUB_ROOT" doctor   # PowerShell 用 "$env:MEMORY_HUB_ROOT"
 ### 功能定位（防全仓检索）
 
 1. **先** `HUB locate --query "<功能或路径>"`（或 `orient`/`context` 里的 L0.5）
-2. **命中** → 直接打开返回的 `paths` / 执行 `commands`；**禁止**再全仓 `rg`/`Glob`/`find`
-3. **未命中** → `map upsert` 补地图后再继续；架构/调用链溯源用 **GitNexus**，不要用全仓文本扫代替地图
+2. **命中** → 打开返回的 `scope.paths` / 执行 `commands`；**禁止**再全仓 `rg`/`Glob`/`find`
+3. **未命中** → `map upsert` / `map seed` 补地图后再继续；架构/调用链溯源用 **GitNexus**
 4. 改完功能必须 `map upsert`（或收尾 `close` 后按 `map_health` 补写），否则下次仍会 miss
+5. 冷启动：`HUB map coverage` → `HUB map seed --agent <agent> --apply` → 再补 role/links
 
 与 GitNexus：`locate`/地图 = 已知功能入口与关联文件；GitNexus = 符号关系与影响面。二者互补，冲突时以仓库源码 + GitNexus 为准，再刷新地图。
 

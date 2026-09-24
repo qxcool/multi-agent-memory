@@ -31,6 +31,8 @@ HUB migrate
 HUB migrate --backfill-map-fingerprints
 HUB overview
 HUB map list
+HUB map coverage
+HUB map seed --agent cursor
 HUB map-health
 HUB list sessions
 ```
@@ -42,8 +44,9 @@ HUB map upsert --agent cursor --feature auth-refresh \
   --role "登录态刷新" --authority "刷新须单例 Promise" \
   --path "src/auth/refresh.ts" --command "npm test -- auth" \
   --link "uses:feature:auth-client"
-HUB locate --query "认证刷新"     # 含 hits + hint；命中勿全仓 rg
+HUB locate --query "认证刷新"     # 含 hits + scope + hint；命中勿全仓 rg
 HUB map list
+HUB map coverage                  # 未映射顶层热点
 HUB map-health
 HUB feedback --id mem-xxxxxxxx --signal stale --reason "路径已迁移"
 ```

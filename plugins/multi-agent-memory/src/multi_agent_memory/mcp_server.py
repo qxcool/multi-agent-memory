@@ -10,7 +10,7 @@ from .hub import MemoryHub, MemoryHubError, resolve_hub
 
 
 SERVER_NAME = "multi-agent-memory"
-SERVER_VERSION = "0.7.3"
+SERVER_VERSION = "0.7.4"
 
 TOOLS = [
     {
@@ -149,6 +149,31 @@ TOOLS = [
                 "limit": {"type": "integer", "default": 200},
                 "hub": {"type": "string"},
             },
+        },
+    },
+    {
+        "name": "memory_map_coverage",
+        "description": "对照仓库顶层与功能地图覆盖率，列出未映射热点（新会话知项目内容）。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "max_unmapped": {"type": "integer", "default": 40},
+                "hub": {"type": "string"},
+            },
+        },
+    },
+    {
+        "name": "memory_map_seed",
+        "description": "按未覆盖顶层目录播种地图草稿；默认 dry_run，apply=true 才写入。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "agent": {"type": "string"},
+                "apply": {"type": "boolean", "default": False},
+                "max_features": {"type": "integer", "default": 40},
+                "hub": {"type": "string"},
+            },
+            "required": ["agent"],
         },
     },
     {
@@ -320,6 +345,16 @@ def _call_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         return _tool_result(result)
     if name == "memory_map_health":
         return _tool_result(hub.map_health(limit=int(arguments.get("limit") or 200)))
+    if name == "memory_map_coverage":
+        return _tool_result(hub.map_coverage(max_unmapped=int(arguments.get("max_unmapped") or 40)))
+    if name == "memory_map_seed":
+        return _tool_result(
+            hub.map_seed(
+                agent=str(arguments["agent"]),
+                dry_run=not bool(arguments.get("apply")),
+                max_features=int(arguments.get("max_features") or 40),
+            )
+        )
     if name == "memory_close":
         check_maps = arguments.get("check_maps")
         if check_maps is None:

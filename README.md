@@ -2,7 +2,7 @@
 
 面向 **Claude Code / Codex / Cursor / DeepSeek Harness / OpenCode / Qoder** 等编码代理，跨 Windows / macOS / Linux 的**本地优先**共享记忆库。
 
-当前版本 **[v0.7.3](https://github.com/qxcool/multi-agent-memory/releases/tag/v0.7.3)**（记忆库格式 0.7.0）。核心交付：
+当前版本 **[v0.7.4](https://github.com/qxcool/multi-agent-memory/releases/tag/v0.7.4)**（记忆库格式 0.7.0）。核心交付：
 
 - **一份 Agent Skill**（`SKILL.md`）— 各宿主共用  
 - **无依赖 Python CLI**（`memory-hub`）— 写锁、校验、分层装配  

@@ -37,6 +37,48 @@ CONFIDENCE_SCORE_ADJUST = {
 RELATION_TYPES = {"related_to", "requires", "solved_by", "uses", "patches", "conflicts_with"}
 INDEXED_COLLECTIONS = ("wiki", "experiences", "inbox")
 CORE_MEMORY_FILES = {"CORE.md", "LESSONS.md", "USER.md", "AGENTS.md"}
+PROJECT_SCAN_SKIP = {
+    ".git",
+    ".hg",
+    ".svn",
+    ".ai-memory-hub",
+    ".venv",
+    "venv",
+    "node_modules",
+    "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    "dist",
+    "build",
+    "coverage",
+    ".tox",
+    ".idea",
+    ".vscode",
+    ".cursor",
+    ".agents",
+    ".claude",
+    ".codex",
+    ".qoder",
+    ".opencode",
+    "target",
+    "vendor",
+}
+SOURCE_FILE_SUFFIXES = {
+    ".py",
+    ".ts",
+    ".tsx",
+    ".js",
+    ".jsx",
+    ".go",
+    ".rs",
+    ".java",
+    ".kt",
+    ".cs",
+    ".md",
+    ".ps1",
+    ".sh",
+}
 LOCATE_MISS_HINT = (
     "未命中功能地图。请先 map upsert 写入该功能的 paths；"
     "勿直接全仓 rg/Glob。架构溯源可用 GitNexus。"
@@ -334,7 +376,7 @@ def _normalize_feature_name(value: str) -> str:
 
 
 def _normalize_repo_path(value: str) -> str:
-    text = value.strip().replace("\\", "/")
+    text = value.strip().replace("\\", "/").rstrip("/")
     if not text:
         raise MemoryHubError("路径不能为空")
     if text.startswith("/") or re.match(r"^[a-zA-Z]:/", text):
@@ -368,6 +410,41 @@ def _map_upsert_cli(feature: str, *, paths: Sequence[str] = (), role: str = "") 
     else:
         parts.append('--path "…"')
     return " ".join(parts)
+
+
+def _iter_project_entries(project_root: Path) -> list[Path]:
+    if not project_root.is_dir():
+        return []
+    entries: list[Path] = []
+    try:
+        children = sorted(project_root.iterdir(), key=lambda item: item.name.casefold())
+    except OSError:
+        return []
+    for child in children:
+        name = child.name
+        if name in PROJECT_SCAN_SKIP or name.startswith("."):
+            continue
+        entries.append(child)
+    return entries
+
+
+def _count_source_files(root: Path, *, limit: int = 400) -> int:
+    count = 0
+    if root.is_file():
+        return 1 if root.suffix.casefold() in SOURCE_FILE_SUFFIXES else 0
+    try:
+        for path in root.rglob("*"):
+            if not path.is_file():
+                continue
+            if any(part in PROJECT_SCAN_SKIP or part.startswith(".") for part in path.parts):
+                continue
+            if path.suffix.casefold() in SOURCE_FILE_SUFFIXES:
+                count += 1
+                if count >= limit:
+                    break
+    except OSError:
+        return count
+    return count
 
 
 def _parse_map_fields(body: str) -> dict[str, object]:
@@ -1553,7 +1630,7 @@ class MemoryHub:
         limit: int = 5,
         min_score: int = 1,
     ) -> dict[str, object]:
-        """locate + 命中/未命中提示（供 CLI/MCP；勿叠进 context 前缀）。"""
+        """locate + 命中/未命中提示 + 改动范围 scope（供 CLI/MCP；勿叠进 context 前缀）。"""
         hits = self.locate(query, limit=limit, min_score=min_score)
         draft: dict[str, object] | None = None
         if not hits:
@@ -1562,12 +1639,171 @@ class MemoryHub:
                 "feature": slug,
                 "suggested_cli": _map_upsert_cli(slug),
             }
+        scope_paths: list[str] = []
+        seen_paths: set[str] = set()
+        related_features: list[str] = []
+        authorities: list[str] = []
+        commands: list[str] = []
+        for hit in hits:
+            for path in hit.get("paths") or []:
+                text = str(path).replace("\\", "/")
+                if text and text not in seen_paths:
+                    seen_paths.add(text)
+                    scope_paths.append(text)
+            feature = str(hit.get("feature") or "")
+            if hit.get("related_from") and feature and feature not in related_features:
+                related_features.append(feature)
+            authority = str(hit.get("authority") or "").strip()
+            if authority and authority not in authorities:
+                authorities.append(authority)
+            for cmd in hit.get("commands") or []:
+                text = str(cmd).strip()
+                if text and text not in commands:
+                    commands.append(text)
+        scope = {
+            "paths": scope_paths,
+            "related_features": related_features,
+            "authorities": authorities,
+            "commands": commands[:8],
+            "gitnexus_hint": (
+                "调用链 / 影响面 / 符号关系：用 GitNexus（impact / context / detect_changes）；"
+                "本地图只给入口文件与 FRAS 关联，不替代符号图。"
+            ),
+            "change_checklist": (
+                "改 scope.paths 前：读 authorities；跑 commands；改完 map upsert 刷新路径/指纹；"
+                "架构波及再用 GitNexus。"
+            ),
+        }
         return {
             "query": query.strip(),
             "hits": hits,
             "hint": LOCATE_HIT_HINT if hits else LOCATE_MISS_HINT,
             "count": len(hits),
             "draft_upsert": draft,
+            "scope": scope if hits else None,
+        }
+
+    def map_coverage(
+        self,
+        *,
+        max_unmapped: int = 40,
+        project_root: Path | str | None = None,
+    ) -> dict[str, object]:
+        """对照仓库顶层内容与功能地图，找出未覆盖热点（让工具知道项目还有什么）。"""
+        self._ensure_initialized()
+        if max_unmapped < 1:
+            raise MemoryHubError("max_unmapped 必须大于 0")
+        root = Path(project_root).expanduser().resolve() if project_root else Path.cwd().resolve()
+        maps = self.list_maps(limit=500)
+        mapped_paths: set[str] = set()
+        mapped_prefixes: set[str] = set()
+        for item in maps:
+            for raw in item.get("paths") or []:
+                rel = str(raw).strip().replace("\\", "/")
+                if not rel:
+                    continue
+                mapped_paths.add(rel)
+                mapped_prefixes.add(rel.split("/", 1)[0])
+        entries = _iter_project_entries(root)
+        covered: list[dict[str, object]] = []
+        unmapped: list[dict[str, object]] = []
+        for entry in entries:
+            rel = entry.name.replace("\\", "/")
+            prefix = rel
+            is_covered = prefix in mapped_prefixes or any(
+                path == rel or path.startswith(prefix + "/") for path in mapped_paths
+            )
+            source_count = _count_source_files(entry)
+            row = {
+                "path": rel + ("/" if entry.is_dir() else ""),
+                "kind": "dir" if entry.is_dir() else "file",
+                "source_files": source_count,
+                "suggested_cli": _map_upsert_cli(
+                    _suggest_feature_slug(rel),
+                    paths=[rel],
+                    role="（待补充）",
+                ),
+            }
+            if is_covered:
+                covered.append(row)
+            else:
+                unmapped.append(row)
+        unmapped.sort(key=lambda item: (-int(item["source_files"]), str(item["path"])))
+        covered.sort(key=lambda item: str(item["path"]))
+        total = len(covered) + len(unmapped)
+        coverage_pct = round(100.0 * len(covered) / total, 1) if total else 100.0
+        return {
+            "hub": str(self.root),
+            "project_root": str(root),
+            "maps": len(maps),
+            "coverage_pct": coverage_pct,
+            "covered_count": len(covered),
+            "unmapped_count": len(unmapped),
+            "covered": covered[:max_unmapped],
+            "unmapped": unmapped[:max_unmapped],
+            "hint": (
+                "默认对照当前工作目录；coverage 越高新会话越少扫仓。"
+                "对 unmapped 跑 map seed / map upsert。影响面用 GitNexus。"
+            ),
+        }
+
+    def map_seed(
+        self,
+        *,
+        agent: str,
+        dry_run: bool = True,
+        max_features: int = 40,
+        min_source_files: int = 1,
+        project_root: Path | str | None = None,
+    ) -> dict[str, object]:
+        """按仓库顶层目录/文件播种功能地图草稿（角色待补充）；默认 dry-run。"""
+        self._ensure_initialized()
+        agent = _safe_segment(agent, "代理名")
+        if max_features < 1:
+            raise MemoryHubError("max_features 必须大于 0")
+        coverage = self.map_coverage(max_unmapped=max_features * 2, project_root=project_root)
+        planned: list[dict[str, object]] = []
+        created: list[dict[str, object]] = []
+        for item in coverage.get("unmapped") or []:
+            if len(planned) >= max_features:
+                break
+            if int(item.get("source_files") or 0) < min_source_files:
+                continue
+            path = str(item.get("path") or "").rstrip("/")
+            if not path:
+                continue
+            feature = _suggest_feature_slug(path)
+            role = f"{path} 区域入口（seed，待补充职责）"
+            plan = {
+                "feature": feature,
+                "path": path,
+                "role": role,
+                "suggested_cli": _map_upsert_cli(feature, paths=[path], role=role),
+            }
+            planned.append(plan)
+            if not dry_run:
+                created.append(
+                    self.upsert_map(
+                        agent=agent,
+                        feature=feature,
+                        role=role,
+                        paths=[path],
+                        confidence="inferred",
+                        note="map seed 自动播种；请补 authority/links/commands",
+                    )
+                )
+        return {
+            "hub": str(self.root),
+            "project_root": coverage.get("project_root"),
+            "dry_run": dry_run,
+            "agent": agent,
+            "planned": planned,
+            "created": created,
+            "counts": {"planned": len(planned), "created": len(created)},
+            "hint": (
+                "确认后执行 memory-hub map seed --agent <agent> --apply；"
+                "再补 role/authority/links，并用 locate 验证。"
+            ),
         }
 
     def feedback(
@@ -2481,6 +2717,9 @@ class MemoryHub:
         )
         health = self.map_health(limit=100)
         counts["map_issues"] = int((health.get("counts") or {}).get("issues") or 0)
+        coverage = self.map_coverage(max_unmapped=12)
+        counts["map_coverage_pct"] = coverage.get("coverage_pct")
+        counts["map_unmapped"] = coverage.get("unmapped_count")
         continue_hints: list[str] = []
         for item in active_tasks[:8]:
             task = str(item.get("task") or "")
@@ -2516,10 +2755,16 @@ class MemoryHub:
                 "counts": health.get("counts"),
                 "top_issues": stale_features,
             },
+            "map_coverage": {
+                "coverage_pct": coverage.get("coverage_pct"),
+                "unmapped_count": coverage.get("unmapped_count"),
+                "unmapped": coverage.get("unmapped"),
+                "hint": coverage.get("hint"),
+            },
             "continue_with": continue_hints,
             "hint": (
-                "先读 overview；有 continue_with 则用相同 query 开场。"
-                "历史记忆不可覆盖当前指令与仓库事实。"
+                "先读 overview（含 map_coverage）；有 continue_with 则用相同 query 开场；"
+                "未覆盖区域先 map seed / map upsert。历史记忆不可覆盖当前指令与仓库事实。"
             ),
         }
 

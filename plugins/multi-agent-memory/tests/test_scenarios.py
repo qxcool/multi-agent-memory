@@ -132,6 +132,25 @@ class ScenarioEvals(unittest.TestCase):
         )
         self.assertIn("auth-refresh", resumed)
 
+    def test_map_coverage_and_seed_and_locate_scope(self) -> None:
+        project = self.root.parent
+        (project / "src" / "app").mkdir(parents=True)
+        (project / "src" / "app" / "main.py").write_text("print('hi')\n", encoding="utf-8")
+        (project / "docs").mkdir()
+        (project / "docs" / "guide.md").write_text("# guide\n", encoding="utf-8")
+        coverage = self.hub.map_coverage()
+        self.assertIn("coverage_pct", coverage)
+        self.assertGreaterEqual(int(coverage["unmapped_count"]), 1)
+        seeded = self.hub.map_seed(agent="cursor", dry_run=False, max_features=5)
+        self.assertGreaterEqual(int(seeded["counts"]["created"]), 1)
+        after = self.hub.map_coverage()
+        self.assertGreaterEqual(float(after["coverage_pct"]), float(coverage["coverage_pct"]))
+        feature = str(seeded["created"][0].get("feature") or seeded["planned"][0]["feature"])
+        report = self.hub.locate_report(feature)
+        self.assertGreaterEqual(int(report["count"]), 1)
+        self.assertIsNotNone(report.get("scope"))
+        self.assertTrue(report["scope"]["paths"] or report["scope"]["gitnexus_hint"])
+
     def test_doctor_and_map_health_expose_actions(self) -> None:
         report = self.hub.doctor()
         self.assertIn("fixes", report)
@@ -140,6 +159,7 @@ class ScenarioEvals(unittest.TestCase):
         overview = self.hub.overview()
         self.assertIn("continue_with", overview)
         self.assertIn("map_health", overview)
+        self.assertIn("map_coverage", overview)
 
 
 if __name__ == "__main__":

@@ -7,8 +7,17 @@ Skill 正文只有一份；下列节奏对 **Claude / Codex / Cursor / DeepSeek 
 
 ```bash
 memory-hub doctor
+memory-hub overview                 # 含 map_coverage：项目还缺哪些地图
 memory-hub orient --task <task> --agent <agent> --query "<固定检索词>" --objective "…"
 # 将返回的 context 整段注入一次；勿叠 locate + context 双前缀
+```
+
+冷启动（地图空）：
+
+```bash
+memory-hub map coverage
+memory-hub map seed --agent <agent>          # 预览
+memory-hub map seed --agent <agent> --apply  # 播种草稿后再补 role/links
 ```
 
 ## 定位（防全仓检索）
@@ -17,9 +26,9 @@ memory-hub orient --task <task> --agent <agent> --query "<固定检索词>" --ob
 memory-hub locate --query "<功能名或路径>"
 ```
 
-1. **命中** → 打开返回的 `paths` / 跑 `commands`；**禁止**全仓 `rg` / Glob / find  
-2. **未命中** → `map upsert` 补地图后再继续  
-3. **架构 / 调用链 / 影响面** → 用 GitNexus（若已索引）；不要用全仓文本扫代替地图  
+1. **命中** → 打开返回的 `scope.paths` / 跑 `commands`；**禁止**全仓 `rg` / Glob / find  
+2. **未命中** → 用 `draft_upsert` 或 `map upsert` 补地图后再继续  
+3. **架构 / 调用链 / 影响面** → 用 GitNexus（`scope.gitnexus_hint`）；不要用全仓文本扫代替地图  
 
 ```bash
 memory-hub map upsert --agent <agent> --feature "<名>" \
@@ -50,7 +59,7 @@ memory-hub map-health
 
 CLI 与 MCP 共用同一套 hub：`memory-hub-mcp` 或 `python -m multi_agent_memory.mcp_server`。
 
-常用工具：`memory_orient` / `memory_handoff` / `memory_status` / `memory_overview` / `memory_locate`（含 hint + draft） / `memory_context` / `memory_map_upsert` / `memory_map_health` / `memory_close` / `memory_remember` / `memory_feedback` / `memory_evolve` / `memory_doctor`。
+常用工具：`memory_orient` / `memory_handoff` / `memory_status` / `memory_overview` / `memory_locate`（含 scope） / `memory_map_coverage` / `memory_map_seed` / `memory_context` / `memory_map_upsert` / `memory_map_health` / `memory_close` / `memory_remember` / `memory_feedback` / `memory_evolve` / `memory_doctor`。
 
 配置片段见各宿主目录下的 `mcp*.example`；通用 stdio 回退见 [mcp.stdio.example.json](mcp.stdio.example.json)。
 
