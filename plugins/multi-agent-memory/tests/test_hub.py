@@ -639,6 +639,7 @@ class MemoryHubTests(unittest.TestCase):
         tracked = project / "lib" / "mod.py"
         tracked.parent.mkdir(parents=True)
         tracked.write_text("alpha\n", encoding="utf-8")
+        (project / "docs").mkdir(parents=True, exist_ok=True)
 
         # 手工写入无指纹的旧地图
         from multi_agent_memory.hub import _atomic_write, _frontmatter
@@ -660,12 +661,32 @@ class MemoryHubTests(unittest.TestCase):
         }
         body = "# Feature: legacy-fp\n\n- 职责：旧地图\n- 关联路径：\n  - lib/mod.py\n"
         _atomic_write(wiki, _frontmatter(meta) + body)
+
+        # 仅目录路径的地图：不应报缺指纹
+        wiki_dir = self.root / "wiki" / "feature-docs-dir.md"
+        meta_dir = {
+            "id": "mem-docsdir00000000000000000000001",
+            "key": "feature:docs-dir",
+            "feature": "docs-dir",
+            "type": "fact",
+            "source_agent": "cursor",
+            "created_at": "2026-01-01T00:00:00+08:00",
+            "updated_at": "2026-01-01T00:00:00+08:00",
+            "confidence": "inferred",
+            "tags": ["map", "feature"],
+            "links": [],
+            "paths": ["docs"],
+            "content_hash": "cafebabecafebabe",
+        }
+        body_dir = "# Feature: docs-dir\n\n- 职责：目录入口\n- 关联路径：\n  - docs\n"
+        _atomic_write(wiki_dir, _frontmatter(meta_dir) + body_dir)
         self.hub.reindex()
 
         health = self.hub.map_health()
         self.assertFalse(health["ok"])
         self.assertGreaterEqual(health["counts"]["no_fingerprint"], 1)
         self.assertTrue(any(i["feature"] == "legacy-fp" and i["needs_fingerprint"] for i in health["issues"]))
+        self.assertFalse(any(i["feature"] == "docs-dir" and i.get("needs_fingerprint") for i in health["issues"]))
 
         planned = self.hub.migrate(dry_run=True, backfill_map_fingerprints=True)
         self.assertTrue(any(str(item).startswith("backfill-map-fp:") for item in planned["planned"]))

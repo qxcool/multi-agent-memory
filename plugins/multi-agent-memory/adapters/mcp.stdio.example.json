@@ -1,13 +1,13 @@
 {
-  "_comment": "Prefer memory-hub-mcp when on PATH. Fallbacks below work on any OS once the package is installed.",
+  "_comment": "Prefer python -m (reliable when Scripts is not on host PATH). memory-hub-mcp works if the console_scripts entry is on PATH.",
   "mcpServers": {
     "multi-agent-memory": {
-      "command": "memory-hub-mcp",
-      "args": []
-    },
-    "multi-agent-memory-via-python": {
       "command": "python",
       "args": ["-m", "multi_agent_memory.mcp_server"]
+    },
+    "multi-agent-memory-via-console-script": {
+      "command": "memory-hub-mcp",
+      "args": []
     },
     "multi-agent-memory-via-python3": {
       "command": "python3",

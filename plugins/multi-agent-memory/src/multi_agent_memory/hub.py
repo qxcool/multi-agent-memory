@@ -225,6 +225,24 @@ def _path_fingerprints_for(
     return result
 
 
+def _file_paths_missing_fingerprint(
+    project_root: Path,
+    paths: Sequence[str],
+    fingerprints: dict[str, str] | None = None,
+) -> list[str]:
+    """仅文件路径需要内容指纹；目录入口（如 docs/）不报缺指纹。"""
+    recorded = fingerprints or {}
+    missing: list[str] = []
+    for raw in paths:
+        rel = str(raw).strip().replace("\\", "/")
+        if not rel or rel in recorded:
+            continue
+        target = project_root / rel
+        if target.is_file():
+            missing.append(rel)
+    return missing
+
+
 def _normalize_path_fingerprints(value: object) -> dict[str, str]:
     if not isinstance(value, dict):
         return {}
@@ -3204,10 +3222,14 @@ class MemoryHub:
             missing = [str(rel) for rel in (item.get("missing_paths") or [])]
             drifted = [str(rel) for rel in (item.get("drifted_paths") or [])]
             fps = item.get("path_fingerprints") or {}
+            if not isinstance(fps, dict):
+                fps = {}
             paths = [str(rel) for rel in (item.get("paths") or []) if rel]
             on_disk = [rel for rel in paths if rel not in missing]
             tags = {str(tag).casefold() for tag in (item.get("tags") or [])}
-            needs_fp = bool(on_disk) and not fps
+            needs_fp = bool(
+                _file_paths_missing_fingerprint(self.root.parent, on_disk, fps)
+            )
             is_stale = "stale" in tags or "disputed" in tags
             if not (missing or drifted or needs_fp or is_stale):
                 continue
@@ -3534,12 +3556,14 @@ class MemoryHub:
                             f"地图 {item.get('feature')} 关联路径内容已漂移：{sample}；请 map upsert 刷新指纹"
                         )
                 fps = item.get("path_fingerprints") or {}
+                if not isinstance(fps, dict):
+                    fps = {}
                 on_disk = [
                     str(rel)
                     for rel in (item.get("paths") or [])
                     if rel and str(rel) not in missing_paths
                 ]
-                if on_disk and not fps:
+                if _file_paths_missing_fingerprint(self.root.parent, on_disk, fps):
                     no_fp_maps += 1
                     if no_fp_maps <= 5:
                         warnings.append(

@@ -46,14 +46,14 @@ OpenCode 通常从以下位置发现技能（与 DeepSeek 有重叠）：
   "mcp": {
     "multi-agent-memory": {
       "type": "local",
-      "command": ["memory-hub-mcp"],
+      "command": ["python", "-m", "multi_agent_memory.mcp_server"],
       "enabled": true
     }
   }
 }
 ```
 
-入口不在 PATH 时：`"command": ["python3", "-m", "multi_agent_memory.mcp_server"]`（Windows 可改 `python`）。
+推荐 `python -m …`（宿主 PATH 常不含 Scripts）。也可用 `memory-hub-mcp`；macOS/Linux 可写 `python3`。
 
 ## 节奏与定位纪律
 

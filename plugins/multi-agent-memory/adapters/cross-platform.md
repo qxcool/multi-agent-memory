@@ -68,7 +68,7 @@ CLI 会把 `\` 规范成 `/`，并拒绝绝对路径；指纹按**文件内容**
 | 引用 hub | `"$env:MEMORY_HUB_ROOT"` | `"$MEMORY_HUB_ROOT"` |
 | Python | 通常 `python` | 常为 `python3` |
 
-MCP 配置里的 `command`：两台机都需 PATH 能找到 `memory-hub-mcp`（或改成 `python` / `python3` + `-m multi_agent_memory.mcp_server`）。
+MCP 配置里的 `command`：推荐 `python`/`python3` + `-m multi_agent_memory.mcp_server`（宿主常不含 Scripts）；也可用 PATH 上的 `memory-hub-mcp`。
 
 ## `--agent` 与主机无关
 

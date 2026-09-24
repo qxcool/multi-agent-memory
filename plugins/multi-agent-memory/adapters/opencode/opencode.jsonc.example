@@ -3,7 +3,7 @@
   "mcp": {
     "multi-agent-memory": {
       "type": "local",
-      "command": ["memory-hub-mcp"],
+      "command": ["python", "-m", "multi_agent_memory.mcp_server"],
       "enabled": true
     }
   }
