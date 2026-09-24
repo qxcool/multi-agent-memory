@@ -1,4 +1,4 @@
-"""零依赖 MCP stdio 服务：orient / locate / context / map / close / remember / feedback / evolve。"""
+"""零依赖 MCP stdio 服务：orient / handoff / locate / coverage / seed / close 等 15 工具。"""
 
 from __future__ import annotations
 
@@ -75,7 +75,7 @@ TOOLS = [
     },
     {
         "name": "memory_overview",
-        "description": "总览：计数、活动任务、地图问题、continue_with 续跑提示。",
+        "description": "总览：计数、活动任务、地图问题、map_coverage_pct/未映射热点、continue_with 续跑提示。",
         "inputSchema": {
             "type": "object",
             "properties": {"hub": {"type": "string"}},
@@ -85,7 +85,7 @@ TOOLS = [
         "name": "memory_locate",
         "description": (
             "按功能名/路径定位 feature 地图（含 FRAS 关联扩展）。"
-            "命中则优先打开 paths，勿全仓 rg；未命中返回 draft_upsert。"
+            "命中返回 scope.paths/commands，优先打开、勿全仓 rg；未命中返回 draft_upsert。"
         ),
         "inputSchema": {
             "type": "object",

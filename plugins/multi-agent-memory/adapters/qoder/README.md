@@ -53,7 +53,8 @@ memory-hub close --task <task> --agent qoder
 用户级：`~/.qoder/settings.json` → `mcpServers`  
 项目级：`<repo>/.mcp.json` 或 `.qoder/settings.json`
 
-示例见 [mcp.json.example](mcp.json.example)。入口不在 PATH 时用 [../mcp.stdio.example.json](../mcp.stdio.example.json)。
+示例见 [mcp.json.example](mcp.json.example)（推荐 `python -m multi_agent_memory.mcp_server`）。  
+工具说明：[../../skills/multi-agent-memory/references/mcp-tools.md](../../skills/multi-agent-memory/references/mcp-tools.md)。
 
 ## Hooks（可选）
 

@@ -22,8 +22,11 @@ CLI / MCP 对所有宿主相同（装一次即可）：
 ```bash
 python -m pip install ./plugins/multi-agent-memory
 memory-hub doctor
-memory-hub-mcp   # 可选
+python -m multi_agent_memory.mcp_server   # 可选；或 memory-hub-mcp
 ```
+
+MCP 工具说明（15 个）：[skills/.../references/mcp-tools.md](../skills/multi-agent-memory/references/mcp-tools.md)。  
+配置推荐 `python -m multi_agent_memory.mcp_server`（见 [mcp.stdio.example.json](mcp.stdio.example.json)）。
 
 一键安装（Skill 链接到多宿主 + pip）：
 

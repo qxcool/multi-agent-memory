@@ -9,7 +9,9 @@
 召回：CJK 二元组 + 置信度加权；侧车倒排缩小候选。写操作增量更新 INDEX + 检索索引。  
 Context：notice→L0→L0.5→L2→（可选 L1）；选 Top 按分、装配按 key；正文无分数/置信度；默认排除 auto-summary。  
 进化：`feedback` + `evolve`（缺失/漂移路径标 stale 并写 `stale_reason`、高 useful 巩固；`--apply-forget` 可选真正 forget）。  
-功能地图：职责 / 权威 / 关系（FRAS）+ `path_fingerprints` 漂移检测；`locate` 可扩展关联地图并在未命中时给 `draft_upsert`。  
+功能地图：职责 / 权威 / 关系（FRAS）+ 文件路径 `path_fingerprints`；`locate` 返回 `scope`（命中勿全仓搜）并可扩展关联地图；未命中给 `draft_upsert`。  
+`map coverage` / `map seed` 按 cwd 扫顶层热点；`overview` 暴露覆盖率。  
+MCP：15 工具与 CLI 对齐，说明见 `skills/.../references/mcp-tools.md`；推荐 `python -m multi_agent_memory.mcp_server`。  
 `close` 默认附带 `map_health`（含 `suggested_actions`）；`doctor` 返回可执行 `fixes`；`handoff` 一站式交接包。  
 `migrate --backfill-map-fingerprints` 可批量补指纹。
 写锁含 pid/host；`remember`/`map` 去重与 key 更新。

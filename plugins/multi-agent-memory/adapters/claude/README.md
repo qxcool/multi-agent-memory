@@ -35,11 +35,14 @@ memory-hub close --task <task> --agent claude
 ## MCP（可选）
 
 ```bash
+# 推荐（PATH 常无 Scripts）
+claude mcp add multi-agent-memory -- python -m multi_agent_memory.mcp_server
+# 或
 claude mcp add multi-agent-memory -- memory-hub-mcp
 ```
 
 或写入用户/项目 MCP 配置，示例见 [mcp.json.example](mcp.json.example)。  
-入口不在 PATH 时用 [../mcp.stdio.example.json](../mcp.stdio.example.json)。
+工具说明：[../../skills/multi-agent-memory/references/mcp-tools.md](../../skills/multi-agent-memory/references/mcp-tools.md)。
 
 ## 说明
 

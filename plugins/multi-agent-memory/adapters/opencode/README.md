@@ -53,7 +53,8 @@ OpenCode 通常从以下位置发现技能（与 DeepSeek 有重叠）：
 }
 ```
 
-推荐 `python -m …`（宿主 PATH 常不含 Scripts）。也可用 `memory-hub-mcp`；macOS/Linux 可写 `python3`。
+推荐 `python -m …`（宿主 PATH 常不含 Scripts）。也可用 `memory-hub-mcp`；macOS/Linux 可写 `python3`。  
+工具说明：[../../skills/multi-agent-memory/references/mcp-tools.md](../../skills/multi-agent-memory/references/mcp-tools.md)。
 
 ## 节奏与定位纪律
 

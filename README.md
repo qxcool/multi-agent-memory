@@ -96,27 +96,28 @@ python -m pip install ./plugins/multi-agent-memory
 
 ### Cursor hooks / MCP（可选）
 
-见 [adapters/cursor](plugins/multi-agent-memory/adapters/cursor/README.md)。MCP 示例：
+见 [adapters/cursor](plugins/multi-agent-memory/adapters/cursor/README.md)。**推荐** `python -m`（规避宿主 PATH 无 Scripts）：
 
 ```json
 {
   "mcpServers": {
     "multi-agent-memory": {
-      "command": "memory-hub-mcp",
-      "args": []
+      "command": "python",
+      "args": ["-m", "multi_agent_memory.mcp_server"]
     }
   }
 }
 ```
 
-Qoder / Claude 等同理，见各自 `adapters/*/mcp.json.example`。
+也可用 `memory-hub-mcp`。Qoder / Claude / OpenCode 等同理，见各自 `adapters/*/mcp.json.example`。  
+MCP 工具一览（15 个）：[mcp-tools.md](plugins/multi-agent-memory/skills/multi-agent-memory/references/mcp-tools.md)。
 
 ### 手动 pip（不跑安装脚本时）
 
 ```bash
 python -m pip install ./plugins/multi-agent-memory
 # 或
-pip install "git+https://github.com/qxcool/multi-agent-memory.git@v0.7.3#subdirectory=plugins/multi-agent-memory"
+pip install "git+https://github.com/qxcool/multi-agent-memory.git@v0.7.4#subdirectory=plugins/multi-agent-memory"
 ```
 
 再把 `plugins/multi-agent-memory/skills/multi-agent-memory` 链接/拷贝到对应宿主的 skills 目录。
@@ -129,8 +130,9 @@ pip install "git+https://github.com/qxcool/multi-agent-memory.git@v0.7.3#subdire
 | 本地可审阅 | UTF-8 Markdown；默认 `.gitignore` 阻止误提交 |
 | 分层上下文 | L0 CORE+LESSONS → L0.5 功能地图 → L2 经验；（L1 status 仅放末尾） |
 | 前缀缓存友好 | 固定 `status --query`；选 Top 按分、装配按 key；正文不含分数/置信度 |
-| 功能地图 | `map upsert` / `locate` / `map list` / `map-health`；authority/links；路径指纹漂移检测 |
+| 功能地图 | `map upsert` / `locate`（含 scope）/ `map coverage` / `map seed` / `map-health`；authority/links；仅文件路径指纹 |
 | 自我进化 | `feedback` + `evolve`；`close` 默检地图；`migrate --backfill-map-fingerprints` |
+| MCP | 15 工具与 CLI 对齐；推荐 `python -m multi_agent_memory.mcp_server` |
 | 本地检索索引 | `meta/search-index.json` 加速 recall/locate（Markdown 仍是真相源） |
 | 零运行时依赖 | 仅需 Python ≥ 3.10；CJK 二元组召回 + 置信度加权 |
 | 并发安全 | 跨平台写锁、原子替换 |
@@ -152,6 +154,7 @@ pip install "git+https://github.com/qxcool/multi-agent-memory.git@v0.7.3#subdire
 更多说明：
 
 - [命令参考](plugins/multi-agent-memory/skills/multi-agent-memory/references/commands.md)
+- [MCP 工具说明](plugins/multi-agent-memory/skills/multi-agent-memory/references/mcp-tools.md)
 - [存储格式](plugins/multi-agent-memory/skills/multi-agent-memory/references/storage.md)
 - [架构说明](docs/architecture.md)
 

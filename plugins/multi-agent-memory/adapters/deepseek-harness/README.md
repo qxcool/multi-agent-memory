@@ -55,4 +55,4 @@ memory-hub close --task <task> --agent deepseek
 
 - Harness：`/skill install github:qxcool/multi-agent-memory`（若宿主支持 GitHub 技能安装，装完后仍建议 `pip install` CLI）
 - 内置目录 `~/.deepseek/skills` 仅在需要隔离时使用；一般不必复制一份
-- MCP：见 [mcp.json.example](mcp.json.example) 或 [../mcp.stdio.example.json](../mcp.stdio.example.json)
+- MCP：见 [mcp.json.example](mcp.json.example)（推荐 `python -m multi_agent_memory.mcp_server`）；工具说明见 [../../skills/multi-agent-memory/references/mcp-tools.md](../../skills/multi-agent-memory/references/mcp-tools.md)

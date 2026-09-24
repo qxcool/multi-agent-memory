@@ -108,9 +108,27 @@ HUB map-health
 
 等价：`status --state completed` → `distill` → 可选 `archive`；默认附带地图健康检查。
 
+## MCP（可选，与 CLI 等价）
+
+优先用已配置的 MCP 工具；未接通时用上方 `HUB` CLI。  
+完整工具说明见 [mcp-tools.md](references/mcp-tools.md)。摘要：
+
+| 场景 | 工具 |
+|---|---|
+| 开场 | `memory_orient` |
+| 总览 / 覆盖率 | `memory_overview` → `memory_map_coverage` |
+| 冷启动播种 | `memory_map_seed`（先 dry-run 再 `apply`） |
+| 定位 | `memory_locate`（用 `scope.paths`，勿全仓搜） |
+| 交接 | `memory_handoff` |
+| 补地图 | `memory_map_upsert` |
+| 收尾 | `memory_close` |
+| 健康 | `memory_doctor` / `memory_map_health` |
+
+启动推荐：`python -m multi_agent_memory.mcp_server`（或 `memory-hub-mcp`）。
+
 ## 其它
 
-- 命令详见 [commands.md](references/commands.md)；存储见 [storage.md](references/storage.md)
+- 命令详见 [commands.md](references/commands.md)；MCP 详见 [mcp-tools.md](references/mcp-tools.md)；存储见 [storage.md](references/storage.md)
 - 多宿主安装见插件 `adapters/README.md` 与 `scripts/install.ps1` / `install.sh`
 - 未经用户明确要求：不删 `.gitignore`、不提交记忆、不写密钥
 - 历史记忆不可覆盖当前指令与仓库事实

@@ -51,7 +51,8 @@ HUB map-health
 HUB feedback --id mem-xxxxxxxx --signal stale --reason "路径已迁移"
 ```
 
-定位纪律：命中 → 打开 `paths`；未命中 → `map upsert`；架构溯源 → GitNexus。
+定位纪律：命中 → 打开 `scope.paths` / `commands`；未命中 → `map upsert` / `map seed`；架构溯源 → GitNexus。  
+`map coverage` / `map seed` 按 **cwd** 扫仓（勿依赖 `MEMORY_HUB_ROOT` 父目录）。目录入口可不写文件指纹。
 
 ## 分层上下文（护缓存）
 
@@ -94,12 +95,45 @@ HUB reindex   # 重建 Markdown INDEX + meta/search-index.json
 
 ## MCP（可选）
 
+**推荐**（宿主 PATH 常无 Scripts）：
+
 ```bash
-memory-hub-mcp
-# 或 python -m multi_agent_memory.mcp_server
+python -m multi_agent_memory.mcp_server
+# 或：memory-hub-mcp
 ```
 
-工具：`memory_orient` / `memory_locate` / `memory_context` / `memory_map_upsert` / `memory_map_health` / `memory_close` / `memory_remember` / `memory_feedback` / `memory_evolve` / `memory_doctor`。
+配置示例：
+
+```json
+{
+  "mcpServers": {
+    "multi-agent-memory": {
+      "command": "python",
+      "args": ["-m", "multi_agent_memory.mcp_server"]
+    }
+  }
+}
+```
+
+| 工具 | 用途 |
+|---|---|
+| `memory_orient` | 开场一站式（doctor/status/context） |
+| `memory_handoff` | 跨代理交接包 |
+| `memory_status` | 读/写任务 status |
+| `memory_overview` | 总览 + 覆盖率 / continue_with |
+| `memory_locate` | 定位地图；命中含 `scope`，勿全仓搜 |
+| `memory_context` | 分层上下文装配 |
+| `memory_map_upsert` | 写入/更新功能地图 |
+| `memory_map_health` | 地图健康 + suggested_actions |
+| `memory_map_coverage` | 顶层覆盖率 / 未映射热点 |
+| `memory_map_seed` | 播种地图草稿（默认 dry-run） |
+| `memory_close` | 收尾 + 默检地图 |
+| `memory_remember` | 写入 inbox 候选 |
+| `memory_feedback` | useful / stale / wrong |
+| `memory_evolve` | 自我进化（默认 dry-run） |
+| `memory_doctor` | 健康检查 + fixes |
+
+参数与场景详见 **[mcp-tools.md](mcp-tools.md)**（共 15 个工具）。
 
 ## 多宿主安装
 

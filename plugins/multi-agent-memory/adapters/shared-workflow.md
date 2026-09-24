@@ -61,7 +61,8 @@ CLI 与 MCP 共用同一套 hub：`memory-hub-mcp` 或 `python -m multi_agent_me
 
 常用工具：`memory_orient` / `memory_handoff` / `memory_status` / `memory_overview` / `memory_locate`（含 scope） / `memory_map_coverage` / `memory_map_seed` / `memory_context` / `memory_map_upsert` / `memory_map_health` / `memory_close` / `memory_remember` / `memory_feedback` / `memory_evolve` / `memory_doctor`。
 
-配置片段见各宿主目录下的 `mcp*.example`；通用 stdio 回退见 [mcp.stdio.example.json](mcp.stdio.example.json)。
+完整参数与场景：[skills/.../mcp-tools.md](../skills/multi-agent-memory/references/mcp-tools.md)。  
+配置片段见各宿主目录下的 `mcp*.example`；通用 stdio 回退见 [mcp.stdio.example.json](mcp.stdio.example.json)。**推荐** `python -m multi_agent_memory.mcp_server`。
 
 ## 跨 OS（不限制环境）
 

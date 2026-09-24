@@ -68,7 +68,8 @@ cp plugins/multi-agent-memory/adapters/cursor/hooks.json .cursor/hooks.json
 ## MCP（可选）
 
 合并用户或项目 MCP 配置，示例见 [mcp.json.example](mcp.json.example)。  
-**推荐** `python -m multi_agent_memory.mcp_server`（Cursor 常不含 Scripts PATH）；`memory-hub-mcp` 亦可。详见 [../mcp.stdio.example.json](../mcp.stdio.example.json)。
+**推荐** `python -m multi_agent_memory.mcp_server`（Cursor 常不含 Scripts PATH）；`memory-hub-mcp` 亦可。  
+工具说明：[../../skills/multi-agent-memory/references/mcp-tools.md](../../skills/multi-agent-memory/references/mcp-tools.md)；stdio 回退见 [../mcp.stdio.example.json](../mcp.stdio.example.json)。
 
 ## 节奏与定位纪律
 

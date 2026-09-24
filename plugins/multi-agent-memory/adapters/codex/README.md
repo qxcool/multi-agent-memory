@@ -48,4 +48,5 @@ python3 -m pip install ./plugins/multi-agent-memory
 
 ## MCP（可选）
 
-若 Codex / 宿主支持 MCP stdio：见 [mcp.json.example](mcp.json.example) 或 [../mcp.stdio.example.json](../mcp.stdio.example.json)。
+若 Codex / 宿主支持 MCP stdio：见 [mcp.json.example](mcp.json.example)（推荐 `python -m multi_agent_memory.mcp_server`）。  
+工具说明：[../../skills/multi-agent-memory/references/mcp-tools.md](../../skills/multi-agent-memory/references/mcp-tools.md)。
