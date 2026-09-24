@@ -1,7 +1,7 @@
 {
   "name": "multi-agent-memory",
-  "version": "0.7.2",
-  "description": "多宿主共享记忆：Claude/Codex/Cursor/DeepSeek/OpenCode + orient/close/MCP",
+  "version": "0.7.3",
+  "description": "多宿主共享记忆：Claude/Codex/Cursor/DeepSeek/OpenCode/Qoder + orient/close/MCP",
   "author": {
     "name": "qxcool",
     "url": "https://github.com/qxcool"

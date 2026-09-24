@@ -1,6 +1,7 @@
 # 命令参考
 
-跨 Win / macOS / Linux。`HUB` = `memory-hub` 或 `python scripts/memory_hub.py`。
+跨 Win / macOS / Linux；宿主不限。`HUB` = `memory-hub` 或 `python`/`python3` + `scripts/memory_hub.py`。  
+下文示例里的 `cursor` 可换成任意 `--agent` 短名（`claude` | `codex` | `cursor` | `deepseek` | `opencode` | `qoder`）。
 
 全局参数在子命令前。省略 `--hub` 时向上查找 `.ai-memory-hub`。
 
@@ -8,14 +9,18 @@
 
 ```bash
 HUB orient --task auth --agent cursor --query "认证刷新" --objective "修刷新"
+HUB handoff --task auth --agent cursor --to-agent claude
 HUB close --task auth --agent cursor --lesson "刷新必须单例" --archive
+HUB close --task auth --agent cursor --evolve-maps   # 收尾时顺带 evolve --apply
+HUB map-health              # 只读：缺失/漂移/缺指纹 + suggested_actions
 HUB evolve              # 扫描
 HUB evolve --apply      # 写入 stale/confirm
+HUB evolve --apply --apply-forget
 ```
 
 `orient`：doctor →（可选 migrate）→ status（含检索词）→ context（含 L0.5 + 末尾 L1）。  
-`close`：completed → distill → 可选 archive。  
-`evolve`：失效路径标 stale；高 useful 巩固；高 wrong 建议 forget。
+`close`：completed → distill → 可选 archive；默认附带 `map_health`（`--no-check-maps` 跳过；`--evolve-maps` 写入）。  
+`evolve`：失效/漂移路径标 stale（写入 `stale_reason`）；高 useful 巩固；高 wrong 建议 forget。
 
 ## 发现与升级
 
@@ -23,8 +28,10 @@ HUB evolve --apply      # 写入 stale/confirm
 HUB doctor
 HUB migrate --dry-run
 HUB migrate
+HUB migrate --backfill-map-fingerprints
 HUB overview
 HUB map list
+HUB map-health
 HUB list sessions
 ```
 
@@ -32,10 +39,16 @@ HUB list sessions
 
 ```bash
 HUB map upsert --agent cursor --feature auth-refresh \
-  --role "登录态刷新" --path "src/auth/refresh.ts" --command "npm test -- auth"
-HUB locate --query "认证刷新"     # 含 missing_paths
+  --role "登录态刷新" --authority "刷新须单例 Promise" \
+  --path "src/auth/refresh.ts" --command "npm test -- auth" \
+  --link "uses:feature:auth-client"
+HUB locate --query "认证刷新"     # 含 hits + hint；命中勿全仓 rg
 HUB map list
+HUB map-health
+HUB feedback --id mem-xxxxxxxx --signal stale --reason "路径已迁移"
 ```
+
+定位纪律：命中 → 打开 `paths`；未命中 → `map upsert`；架构溯源 → GitNexus。
 
 ## 分层上下文（护缓存）
 
@@ -83,17 +96,17 @@ memory-hub-mcp
 # 或 python -m multi_agent_memory.mcp_server
 ```
 
-工具：`memory_orient` / `memory_locate` / `memory_context` / `memory_map_upsert` / `memory_doctor`。
+工具：`memory_orient` / `memory_locate` / `memory_context` / `memory_map_upsert` / `memory_map_health` / `memory_close` / `memory_remember` / `memory_feedback` / `memory_evolve` / `memory_doctor`。
 
 ## 多宿主安装
 
-见插件 [`adapters/README.md`](../../adapters/README.md) 与：
+见插件 [`adapters/README.md`](../../adapters/README.md)。跨 OS：[cross-platform.md](../../adapters/cross-platform.md)。
 
 ```bash
 # Windows
 ..\..\scripts\install.ps1
-# Unix
+# macOS / Linux
 ../../scripts/install.sh
 ```
 
-`--agent` 短名：`claude` | `codex` | `cursor` | `deepseek` | `opencode`。
+`--agent` 短名：`claude` | `codex` | `cursor` | `deepseek` | `opencode` | `qoder`。

@@ -8,24 +8,38 @@
 ~/.claude/skills/multi-agent-memory  →  <plugin>/skills/multi-agent-memory
 ```
 
-PowerShell：
-
 ```powershell
-$src = Resolve-Path ..\..\skills\multi-agent-memory
-$dst = "$env:USERPROFILE\.claude\skills\multi-agent-memory"
-New-Item -ItemType Directory -Force (Split-Path $dst) | Out-Null
-if (Test-Path $dst) { Remove-Item $dst -Force -Recurse }
-cmd /c mklink /J "$dst" "$src"
+# Windows
+.\plugins\multi-agent-memory\scripts\install.ps1 -Hosts claude
 ```
 
-或运行仓库脚本：`scripts/install.ps1 -Hosts claude`。
+```bash
+# macOS / Linux
+./plugins/multi-agent-memory/scripts/install.sh --hosts claude
+```
 
-## 节奏
+## `--agent`
+
+稳定短名：`claude`。
+
+## 节奏与定位纪律
+
+见 [../shared-workflow.md](../shared-workflow.md)。摘要：
 
 ```bash
 memory-hub orient --task <task> --agent claude --query "<固定检索词>" --objective "…"
+memory-hub locate --query "…"          # 命中则勿全仓 rg
 memory-hub close --task <task> --agent claude
 ```
+
+## MCP（可选）
+
+```bash
+claude mcp add multi-agent-memory -- memory-hub-mcp
+```
+
+或写入用户/项目 MCP 配置，示例见 [mcp.json.example](mcp.json.example)。  
+入口不在 PATH 时用 [../mcp.stdio.example.json](../mcp.stdio.example.json)。
 
 ## 说明
 

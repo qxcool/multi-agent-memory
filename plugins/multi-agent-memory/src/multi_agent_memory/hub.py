@@ -37,6 +37,12 @@ CONFIDENCE_SCORE_ADJUST = {
 RELATION_TYPES = {"related_to", "requires", "solved_by", "uses", "patches", "conflicts_with"}
 INDEXED_COLLECTIONS = ("wiki", "experiences", "inbox")
 CORE_MEMORY_FILES = {"CORE.md", "LESSONS.md", "USER.md", "AGENTS.md"}
+LOCATE_MISS_HINT = (
+    "未命中功能地图。请先 map upsert 写入该功能的 paths；"
+    "勿直接全仓 rg/Glob。架构溯源可用 GitNexus。"
+)
+LOCATE_HIT_HINT = "已命中功能地图：优先打开返回的 paths/commands，勿全仓 rg/Glob。"
+RELATED_MAP_SCORE_FLOOR = 4
 _TOKEN_CHUNK = re.compile(r"[^\s,，;；、]+")
 _CJK_RUN = re.compile(r"[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]+")
 _LATIN_TOKEN = re.compile(r"[a-z0-9][a-z0-9_./-]{0,63}", re.IGNORECASE)
@@ -64,7 +70,7 @@ STATUS_FIELDS = {
 
 
 def resolve_hub(explicit: str | Path | None = None, *, start: Path | None = None) -> Path:
-    """解析记忆库路径：显式路径优先；默认名则从 start 向上查找。"""
+    """解析记忆库路径：显式 --hub → 向上查找 .ai-memory-hub → MEMORY_HUB_ROOT → 默认新建路径。"""
     start = (start or Path.cwd()).resolve()
     if explicit is not None:
         path = Path(explicit).expanduser()
@@ -81,6 +87,9 @@ def resolve_hub(explicit: str | Path | None = None, *, start: Path | None = None
         if current.parent == current:
             break
         current = current.parent
+    env_hub = os.environ.get("MEMORY_HUB_ROOT", "").strip()
+    if env_hub:
+        return Path(env_hub).expanduser().resolve()
     return (start / HUB_DIRNAME).resolve()
 
 
@@ -107,6 +116,82 @@ def _version_less(left: str, right: str) -> bool:
 def _content_fingerprint(text: str) -> str:
     normalized = " ".join(text.split()).casefold()
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
+
+
+_MAX_PATH_FINGERPRINT_BYTES = 2 * 1024 * 1024
+
+
+def _repo_file_fingerprint(project_root: Path, relative: str) -> str | None:
+    """仓库相对路径内容指纹；缺失或不可读返回 None。大文件用 size+mtime。"""
+    try:
+        root = project_root.resolve()
+        path = (root / relative).resolve()
+        try:
+            path.relative_to(root)
+        except ValueError:
+            return None
+        if not path.is_file():
+            return None
+        size = path.stat().st_size
+        if size > _MAX_PATH_FINGERPRINT_BYTES:
+            stamp = f"meta:{size}:{path.stat().st_mtime_ns}"
+            return hashlib.sha256(stamp.encode("utf-8")).hexdigest()[:16]
+        return hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+    except OSError:
+        return None
+
+
+def _inspect_map_paths(
+    project_root: Path,
+    paths: Sequence[str],
+    fingerprints: dict[str, str] | None = None,
+) -> dict[str, list[str]]:
+    """检查地图路径：missing=不存在；drifted=存在但与记录指纹不一致。"""
+    recorded = fingerprints or {}
+    missing: list[str] = []
+    drifted: list[str] = []
+    for raw in paths:
+        rel = str(raw).strip().replace("\\", "/")
+        if not rel:
+            continue
+        target = project_root / rel
+        if not target.exists():
+            missing.append(rel)
+            continue
+        expected = recorded.get(rel)
+        if expected is None:
+            # 兼容旧地图：无指纹则不报漂移
+            continue
+        actual = _repo_file_fingerprint(project_root, rel)
+        if actual is None or actual != expected:
+            drifted.append(rel)
+    return {"missing": missing, "drifted": drifted}
+
+
+def _path_fingerprints_for(
+    project_root: Path,
+    paths: Sequence[str],
+) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for raw in paths:
+        rel = str(raw).strip().replace("\\", "/")
+        if not rel:
+            continue
+        fingerprint = _repo_file_fingerprint(project_root, rel)
+        if fingerprint is not None:
+            result[rel] = fingerprint
+    return result
+
+
+def _normalize_path_fingerprints(value: object) -> dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    result: dict[str, str] = {}
+    for key, item in value.items():
+        rel = str(key).strip().replace("\\", "/")
+        if rel and isinstance(item, str) and item.strip():
+            result[rel] = item.strip()
+    return result
 
 
 def _approx_char_budget(token_budget: int) -> int:
@@ -259,11 +344,39 @@ def _normalize_repo_path(value: str) -> str:
     return text
 
 
+def _suggest_feature_slug(query: str) -> str:
+    """从查询猜测 feature 短名，供 locate 未命中时的 draft upsert。"""
+    tokens = _LATIN_TOKEN.findall(query.casefold())
+    if tokens:
+        return "-".join(tokens[:5])[:80]
+    compact = re.sub(r"[^\w\u4e00-\u9fff]+", "-", query.strip(), flags=re.UNICODE).strip("-")
+    return (compact[:40] or "unnamed").casefold()
+
+
+def _map_upsert_cli(feature: str, *, paths: Sequence[str] = (), role: str = "") -> str:
+    parts = [
+        "memory-hub map upsert --agent <agent>",
+        f'--feature "{feature}"',
+    ]
+    if role:
+        parts.append(f'--role "{_one_line(role)}"')
+    else:
+        parts.append('--role "…"')
+    if paths:
+        for path in list(paths)[:3]:
+            parts.append(f'--path "{path}"')
+    else:
+        parts.append('--path "…"')
+    return " ".join(parts)
+
+
 def _parse_map_fields(body: str) -> dict[str, object]:
     role = ""
+    authority = ""
     commands: list[str] = []
     note = ""
     paths: list[str] = []
+    relations: list[str] = []
     section: str | None = None
     placeholders = {"（待补充）", "(待补充)", "（无）", "(无)"}
 
@@ -285,11 +398,23 @@ def _parse_map_fields(body: str) -> dict[str, object]:
             role = _accept(line[len("- 职责:") :]) or ""
             section = None
             continue
-        if line in {"- 关联路径：", "- 关联路径:"}:
+        if line.startswith("- 权威："):
+            authority = _accept(line[len("- 权威：") :]) or ""
+            section = None
+            continue
+        if line.startswith("- 权威:"):
+            authority = _accept(line[len("- 权威:") :]) or ""
+            section = None
+            continue
+        # 关联路径为规范写法；关键路径兼容历史渲染笔误
+        if line in {"- 关联路径：", "- 关联路径:", "- 关键路径：", "- 关键路径:"}:
             section = "paths"
             continue
         if line in {"- 相关命令：", "- 相关命令:"}:
             section = "commands"
+            continue
+        if line in {"- 关系：", "- 关系:"}:
+            section = "relations"
             continue
         if line.startswith("- 备注："):
             rest = line[len("- 备注：") :].strip()
@@ -315,12 +440,23 @@ def _parse_map_fields(body: str) -> dict[str, object]:
             accepted = _accept(line[2:])
             if accepted:
                 commands.append(accepted)
+        elif section == "relations" and line.startswith("- "):
+            accepted = _accept(line[2:])
+            if accepted:
+                relations.append(accepted)
         elif section == "note":
             fragment = line[2:].strip() if line.startswith("- ") else line
             accepted = _accept(fragment)
             if accepted:
                 note = f"{note} {accepted}".strip() if note else accepted
-    return {"role": role, "paths": paths, "commands": commands, "note": note}
+    return {
+        "role": role,
+        "authority": authority,
+        "paths": paths,
+        "commands": commands,
+        "relations": relations,
+        "note": note,
+    }
 
 
 def _render_map_body(
@@ -332,6 +468,8 @@ def _render_map_body(
     note: str,
     agent: str,
     stamp: str,
+    authority: str = "",
+    links: Sequence[dict[str, str]] = (),
 ) -> str:
     lines = [
         f"# Feature: {feature}",
@@ -339,7 +477,8 @@ def _render_map_body(
         f"- Agent: {agent}",
         f"- Updated: {stamp}",
         f"- 职责：{role or '（待补充）'}",
-        "- 关键路径：",
+        f"- 权威：{authority or '（无）'}",
+        "- 关联路径：",
     ]
     if paths:
         lines.extend(f"  - {path}" for path in paths)
@@ -348,6 +487,15 @@ def _render_map_body(
     lines.append("- 相关命令：")
     if commands:
         lines.extend(f"  - {command}" for command in commands)
+    else:
+        lines.append("  - （无）")
+    lines.append("- 关系：")
+    if links:
+        for item in links:
+            relation = str(item.get("relation") or "").strip()
+            target = str(item.get("target") or "").strip()
+            if relation and target:
+                lines.append(f"  - {relation} → {target}")
     else:
         lines.append("  - （无）")
     if note:
@@ -558,6 +706,7 @@ class MemoryHub:
         *,
         dry_run: bool = False,
         backfill_hash: bool = False,
+        backfill_map_fingerprints: bool = False,
     ) -> dict[str, object]:
         """将旧记忆库结构升级到当前格式（幂等）。"""
         if not self.root.exists():
@@ -607,6 +756,40 @@ class MemoryHub:
                 hash_candidates.append(path)
                 planned.append(f"backfill-hash:{relative.as_posix()}")
 
+        fingerprint_candidates: list[tuple[Path, dict[str, object], str, dict[str, str]]] = []
+        if backfill_map_fingerprints:
+            project_root = self.root.parent
+            for collection in ("wiki", "experiences", "inbox"):
+                base = self.root / collection
+                if not base.is_dir():
+                    continue
+                for path in base.glob("*.md"):
+                    if path.name == "INDEX.md":
+                        continue
+                    try:
+                        metadata, body = _split_frontmatter(path.read_text(encoding="utf-8"))
+                    except (OSError, UnicodeDecodeError):
+                        continue
+                    key = metadata.get("key") if isinstance(metadata.get("key"), str) else ""
+                    tags = metadata.get("tags", [])
+                    tag_list = [str(item).casefold() for item in tags] if isinstance(tags, list) else []
+                    is_map = key.casefold().startswith("feature:") or "map" in tag_list
+                    if not is_map:
+                        continue
+                    meta_paths = metadata.get("paths")
+                    path_list = [str(item) for item in meta_paths] if isinstance(meta_paths, list) else []
+                    if not path_list:
+                        parsed = _parse_map_fields(body)
+                        path_list = [str(item) for item in parsed.get("paths") or []]
+                    if not path_list:
+                        continue
+                    new_fps = _path_fingerprints_for(project_root, path_list)
+                    old_fps = _normalize_path_fingerprints(metadata.get("path_fingerprints"))
+                    if not new_fps or new_fps == old_fps:
+                        continue
+                    fingerprint_candidates.append((path, metadata, body, new_fps))
+                    planned.append(f"backfill-map-fp:{path.relative_to(self.root).as_posix()}")
+
         if dry_run:
             return {
                 "hub": str(self.root),
@@ -617,6 +800,7 @@ class MemoryHub:
                 "created": [],
                 "updated": [],
                 "hashed": [],
+                "map_fingerprints": [],
             }
 
         with self._write_lock():
@@ -644,6 +828,15 @@ class MemoryHub:
                 metadata["content_hash"] = _content_fingerprint(body)
                 _atomic_write(path, _frontmatter(metadata) + body.lstrip("\n"))
                 hashed.append(path.relative_to(self.root).as_posix())
+            fingerprinted: list[str] = []
+            for path, metadata, body, new_fps in fingerprint_candidates:
+                metadata["path_fingerprints"] = new_fps
+                if "authority" not in metadata:
+                    metadata["authority"] = ""
+                if "stale_reason" not in metadata:
+                    metadata["stale_reason"] = ""
+                _atomic_write(path, _frontmatter(metadata) + body.lstrip("\n"))
+                fingerprinted.append(path.relative_to(self.root).as_posix())
             self._write_version_unlocked(HUB_FORMAT_VERSION)
             updated.append(VERSION_FILENAME)
             counts = self._reindex_unlocked()
@@ -658,6 +851,7 @@ class MemoryHub:
             "created": created,
             "updated": updated,
             "hashed": hashed,
+            "map_fingerprints": fingerprinted,
             "index": counts,
         }
 
@@ -996,11 +1190,16 @@ class MemoryHub:
         paths: Sequence[str] = (),
         commands: Sequence[str] = (),
         note: str = "",
+        authority: str = "",
         source_task: str | None = None,
         confidence: str = "confirmed",
         merge_paths: bool = True,
+        links: Sequence[tuple[str, str]] = (),
     ) -> dict[str, object]:
-        """写入或更新功能地图（wiki + key=feature:…），供 locate 快速定位。"""
+        """写入或更新功能地图（wiki + key=feature:…），供 locate 快速定位。
+
+        FRAS 对齐：职责≈F、links≈R、authority≈A；路径漂移由 path_fingerprints 检测（S）。
+        """
         self._ensure_initialized()
         agent = _safe_segment(agent, "代理名")
         feature_name = _normalize_feature_name(feature)
@@ -1009,7 +1208,15 @@ class MemoryHub:
         clean_source_task = _safe_segment(source_task, "来源任务") if source_task else ""
         clean_role = _one_line(role)
         clean_note = _one_line(note)
+        clean_authority = _one_line(authority)
         clean_commands = [_one_line(item) for item in commands if str(item).strip()]
+        clean_links: list[dict[str, str]] = []
+        for relation, target in links:
+            clean_relation = _choice(relation, RELATION_TYPES, "关系类型")
+            clean_target = _one_line(target)
+            if not clean_target:
+                raise MemoryHubError("关系目标不能为空")
+            clean_links.append({"relation": clean_relation, "target": clean_target})
         clean_paths: list[str] = []
         seen_paths: set[str] = set()
         for item in paths:
@@ -1019,18 +1226,28 @@ class MemoryHub:
                 continue
             seen_paths.add(folded)
             clean_paths.append(normalized)
-        if not clean_role and not clean_paths and not clean_commands and not clean_note:
-            raise MemoryHubError("地图至少需要职责、路径、命令或备注之一")
+        if (
+            not clean_role
+            and not clean_paths
+            and not clean_commands
+            and not clean_note
+            and not clean_authority
+            and not clean_links
+        ):
+            raise MemoryHubError("地图至少需要职责、权威、路径、命令、关系或备注之一")
 
         now = _now()
         stamp = now.isoformat(timespec="seconds")
+        project_root = self.root.parent
         with self._write_lock():
             existing_path = self._find_by_key(clean_key)
             old_meta: dict[str, object] = {}
             old_paths: list[str] = []
             old_commands: list[str] = []
+            old_links: list[dict[str, str]] = []
             old_role = ""
             old_note = ""
+            old_authority = ""
             if existing_path is not None:
                 try:
                     old_meta, old_body = _split_frontmatter(existing_path.read_text(encoding="utf-8"))
@@ -1039,12 +1256,23 @@ class MemoryHub:
                 parsed = _parse_map_fields(old_body)
                 old_role = str(parsed.get("role") or "")
                 old_note = str(parsed.get("note") or "")
+                old_authority = str(old_meta.get("authority") or parsed.get("authority") or "")
                 meta_paths = old_meta.get("paths")
                 if isinstance(meta_paths, list) and meta_paths:
                     old_paths = [str(item) for item in meta_paths]
                 else:
                     old_paths = [str(item) for item in parsed.get("paths") or []]
                 old_commands = [str(item) for item in parsed.get("commands") or []]
+                meta_links = old_meta.get("links")
+                if isinstance(meta_links, list):
+                    for item in meta_links:
+                        if isinstance(item, dict) and item.get("relation") and item.get("target"):
+                            old_links.append(
+                                {
+                                    "relation": str(item["relation"]),
+                                    "target": str(item["target"]),
+                                }
+                            )
 
             final_paths: list[str] = []
             seen_final: set[str] = set()
@@ -1071,6 +1299,9 @@ class MemoryHub:
                 final_commands = list(dict.fromkeys(old_commands))
             final_role = clean_role or old_role
             final_note = clean_note or old_note
+            final_authority = clean_authority or old_authority
+            final_links = clean_links if clean_links else list(old_links)
+            path_fingerprints = _path_fingerprints_for(project_root, final_paths)
 
             narrative = _render_map_body(
                 feature=feature_name,
@@ -1080,17 +1311,26 @@ class MemoryHub:
                 note=final_note,
                 agent=agent,
                 stamp=stamp,
+                authority=final_authority,
+                links=final_links,
             )
             fingerprint = _content_fingerprint(narrative)
             if existing_path is not None:
                 old_hash = old_meta.get("content_hash")
-                if isinstance(old_hash, str) and old_hash == fingerprint:
+                old_fps = _normalize_path_fingerprints(old_meta.get("path_fingerprints"))
+                same_body = isinstance(old_hash, str) and old_hash == fingerprint
+                same_fps = old_fps == path_fingerprints
+                same_authority = str(old_meta.get("authority") or "") == final_authority
+                same_links = old_links == final_links
+                if same_body and same_fps and same_authority and same_links:
                     return {
                         **self._remember_payload(existing_path, old_meta, deduped=True),
                         "feature": feature_name,
                         "paths": final_paths,
                         "commands": final_commands,
                         "role": final_role,
+                        "authority": final_authority or None,
+                        "path_fingerprints": path_fingerprints,
                     }
                 memory_id = str(old_meta.get("id") or f"mem-{uuid.uuid4().hex}")
                 created_at = str(old_meta.get("created_at") or stamp)
@@ -1118,10 +1358,26 @@ class MemoryHub:
                 "updated_at": stamp,
                 "confidence": confidence,
                 "tags": ["map", "feature"],
-                "links": [],
+                "links": final_links,
                 "paths": final_paths,
+                "authority": final_authority,
+                "path_fingerprints": path_fingerprints,
+                "stale_reason": "",
                 "content_hash": fingerprint,
             }
+            # 刷新地图时保留反馈计数；去掉 stale/disputed（等同已修正）
+            if old_meta:
+                for counter in ("feedback_useful", "feedback_stale", "feedback_wrong"):
+                    if counter in old_meta:
+                        metadata[counter] = int(old_meta.get(counter) or 0)
+                old_tags = old_meta.get("tags")
+                if isinstance(old_tags, list):
+                    kept = [
+                        str(tag)
+                        for tag in old_tags
+                        if str(tag).casefold() not in {"stale", "disputed", "map", "feature"}
+                    ]
+                    metadata["tags"] = ["map", "feature", *kept]
             _atomic_write(path, _frontmatter(metadata) + narrative)
             self._touch_index_unlocked(collections=("wiki",))
         return {
@@ -1130,6 +1386,8 @@ class MemoryHub:
             "paths": final_paths,
             "commands": final_commands,
             "role": final_role,
+            "authority": final_authority or None,
+            "path_fingerprints": path_fingerprints,
         }
 
     def locate(
@@ -1138,6 +1396,7 @@ class MemoryHub:
         *,
         limit: int = 5,
         min_score: int = 1,
+        include_related: bool = True,
     ) -> list[dict[str, object]]:
         """按功能/路径线索定位地图，返回短结果（默认不灌全文）。优先本地倒排索引。"""
         self._ensure_initialized()
@@ -1153,6 +1412,7 @@ class MemoryHub:
         docs = self._search_docs()
         hits: list[dict[str, object]] = []
         project_root = self.root.parent
+        by_key: dict[str, tuple[str, dict[str, object]]] = {}
 
         for relative, doc in docs.items():
             if not isinstance(doc, dict):
@@ -1160,9 +1420,11 @@ class MemoryHub:
             collection = str(doc.get("collection") or "")
             if collection not in {"wiki", "experiences", "inbox"}:
                 continue
+            key = str(doc.get("key") or "")
+            if key:
+                by_key[key.casefold()] = (relative.replace("\\", "/"), doc)
             is_map = bool(doc.get("is_map"))
             path_list = [str(item) for item in doc.get("paths") or []]
-            key = str(doc.get("key") or "")
             feature = str(doc.get("feature") or Path(relative).stem)
             role = str(doc.get("role") or "")
             commands = [str(item) for item in doc.get("commands") or []]
@@ -1182,16 +1444,23 @@ class MemoryHub:
             exact = 8 if query_folded in map_blob else 0
             if term_hits == 0 and path_hits == 0 and exact == 0:
                 continue
-            map_bonus = 12 if is_map else 0
+            map_bonus = 18 if is_map else 0
             confidence = str(doc.get("confidence") or "unspecified")
             conf_bonus = CONFIDENCE_SCORE_ADJUST.get(confidence.casefold(), 0)
             useful = int(doc.get("feedback_useful") or 0)
             useful_bonus = min(6, useful * 2) if useful > 0 else 0
-            penalty = int(doc.get("feedback_stale") or 0) * 2 + int(doc.get("feedback_wrong") or 0) * 4
+            tags = {str(tag).casefold() for tag in (doc.get("tags") or [])}
+            stale_penalty = 10 if ("stale" in tags or "disputed" in tags) else 0
+            penalty = (
+                int(doc.get("feedback_stale") or 0) * 2
+                + int(doc.get("feedback_wrong") or 0) * 4
+                + stale_penalty
+            )
             score = term_hits * 3 + path_hits * 6 + exact + map_bonus + conf_bonus + useful_bonus - penalty
             if score < min_score:
                 continue
-            missing_paths = [rel for rel in path_list if rel and not (project_root / str(rel)).exists()]
+            fps = _normalize_path_fingerprints(doc.get("path_fingerprints"))
+            inspected = _inspect_map_paths(project_root, path_list, fps)
             hits.append(
                 {
                     "score": score,
@@ -1199,17 +1468,107 @@ class MemoryHub:
                     "key": key or None,
                     "path": relative.replace("\\", "/"),
                     "role": role or None,
+                    "authority": doc.get("authority") if isinstance(doc.get("authority"), str) else None,
                     "paths": path_list,
-                    "missing_paths": missing_paths,
+                    "missing_paths": inspected["missing"],
+                    "drifted_paths": inspected["drifted"],
                     "commands": commands,
                     "confidence": confidence,
+                    "stale_reason": doc.get("stale_reason") if isinstance(doc.get("stale_reason"), str) else None,
                     "memory_id": doc.get("id") if isinstance(doc.get("id"), str) else None,
                     "is_map": is_map,
+                    "related_from": None,
                 }
             )
 
         hits.sort(key=lambda item: (-int(item["score"]), str(item.get("key") or ""), str(item["path"])))
-        return hits[:limit]
+        primary = hits[:limit]
+
+        if include_related and primary:
+            seen_paths = {str(item.get("path") or "") for item in primary}
+            related: list[dict[str, object]] = []
+            for seed in primary:
+                if not seed.get("is_map"):
+                    continue
+                seed_path = str(seed.get("path") or "")
+                seed_doc = docs.get(seed_path) or docs.get(seed_path.replace("/", "\\"))
+                if not isinstance(seed_doc, dict):
+                    # docs keys are posix relative
+                    for rel, candidate in docs.items():
+                        if rel.replace("\\", "/") == seed_path and isinstance(candidate, dict):
+                            seed_doc = candidate
+                            break
+                if not isinstance(seed_doc, dict):
+                    continue
+                for target in seed_doc.get("links") or []:
+                    target_key = str(target).strip().casefold()
+                    if not target_key:
+                        continue
+                    if not target_key.startswith("feature:"):
+                        target_key = f"feature:{target_key}"
+                    found = by_key.get(target_key)
+                    if not found:
+                        continue
+                    rel_path, rel_doc = found
+                    if rel_path in seen_paths:
+                        continue
+                    path_list = [str(item) for item in rel_doc.get("paths") or []]
+                    fps = _normalize_path_fingerprints(rel_doc.get("path_fingerprints"))
+                    inspected = _inspect_map_paths(project_root, path_list, fps)
+                    related.append(
+                        {
+                            "score": max(RELATED_MAP_SCORE_FLOOR, int(seed["score"]) - 6),
+                            "feature": str(rel_doc.get("feature") or Path(rel_path).stem),
+                            "key": str(rel_doc.get("key") or "") or None,
+                            "path": rel_path,
+                            "role": str(rel_doc.get("role") or "") or None,
+                            "authority": rel_doc.get("authority")
+                            if isinstance(rel_doc.get("authority"), str)
+                            else None,
+                            "paths": path_list,
+                            "missing_paths": inspected["missing"],
+                            "drifted_paths": inspected["drifted"],
+                            "commands": [str(item) for item in rel_doc.get("commands") or []],
+                            "confidence": str(rel_doc.get("confidence") or "unspecified"),
+                            "stale_reason": rel_doc.get("stale_reason")
+                            if isinstance(rel_doc.get("stale_reason"), str)
+                            else None,
+                            "memory_id": rel_doc.get("id") if isinstance(rel_doc.get("id"), str) else None,
+                            "is_map": True,
+                            "related_from": seed.get("key") or seed.get("feature"),
+                        }
+                    )
+                    seen_paths.add(rel_path)
+            related.sort(key=lambda item: (-int(item["score"]), str(item.get("key") or ""), str(item["path"])))
+            for item in related:
+                if len(primary) >= limit * 2:
+                    break
+                primary.append(item)
+        return primary
+
+    def locate_report(
+        self,
+        query: str,
+        *,
+        limit: int = 5,
+        min_score: int = 1,
+    ) -> dict[str, object]:
+        """locate + 命中/未命中提示（供 CLI/MCP；勿叠进 context 前缀）。"""
+        hits = self.locate(query, limit=limit, min_score=min_score)
+        draft: dict[str, object] | None = None
+        if not hits:
+            slug = _suggest_feature_slug(query)
+            draft = {
+                "feature": slug,
+                "suggested_cli": _map_upsert_cli(slug),
+            }
+        return {
+            "query": query.strip(),
+            "hits": hits,
+            "hint": LOCATE_HIT_HINT if hits else LOCATE_MISS_HINT,
+            "count": len(hits),
+            "draft_upsert": draft,
+        }
 
     def feedback(
         self,
@@ -1217,6 +1576,7 @@ class MemoryHub:
         signal: str,
         memory_id: str | None = None,
         path: str | None = None,
+        reason: str | None = None,
     ) -> dict[str, object]:
         """对记忆投票：useful 巩固，stale/wrong 降权，驱动自我进化。"""
         self._ensure_initialized()
@@ -1253,17 +1613,21 @@ class MemoryHub:
             if confidence not in CONFIDENCE_LEVELS:
                 confidence = "unspecified"
 
+            clean_reason = _one_line(reason) if reason else ""
             if signal == "useful":
                 useful += 1
                 if useful >= 2 and confidence in {"unspecified", "tentative", "inferred"}:
                     confidence = "confirmed"
                 tag_list = [tag for tag in tag_list if tag.casefold() not in {"stale", "disputed"}]
+                metadata["stale_reason"] = ""
             elif signal == "stale":
                 stale += 1
                 if "stale" not in {tag.casefold() for tag in tag_list}:
                     tag_list.append("stale")
                 if confidence == "confirmed":
                     confidence = "tentative"
+                if clean_reason:
+                    metadata["stale_reason"] = clean_reason
             else:
                 wrong += 1
                 if "disputed" not in {tag.casefold() for tag in tag_list}:
@@ -1293,6 +1657,7 @@ class MemoryHub:
             "feedback_stale": stale,
             "feedback_wrong": wrong,
             "tags": tag_list,
+            "stale_reason": metadata.get("stale_reason") or None,
         }
 
     def recall(
@@ -1515,6 +1880,13 @@ class MemoryHub:
             raise MemoryHubError("地图预算必须大于 0")
         if map_limit < 1:
             raise MemoryHubError("地图条数必须大于 0")
+        # 续跑：省略 query 时复用 status 固定检索词（护前缀缓存）
+        if not (query or "").strip() and session_task and session_agent:
+            try:
+                pinned_status = self.get_status(task=session_task, agent=session_agent)
+                query = str(pinned_status.get("query") or "").strip() or None
+            except MemoryHubError:
+                query = None
         char_budget = (
             min(max_chars, _approx_char_budget(token_budget)) if token_budget is not None else max_chars
         )
@@ -1570,11 +1942,13 @@ class MemoryHub:
                 command_text = "；".join(str(cmd) for cmd in (item.get("commands") or [])) or "（无）"
                 feature = str(item.get("feature") or item.get("key") or item.get("path"))
                 key = str(item.get("key") or "")
+                authority = str(item.get("authority") or "").strip()
                 block = (
                     f"### {feature}\n"
                     f"- 职责：{role or '（未填写）'}\n"
-                    f"- 路径：{path_text}\n"
-                    f"- 命令：{command_text}\n"
+                    + (f"- 权威：{authority}\n" if authority else "")
+                    + f"- 路径：{path_text}\n"
+                    + f"- 命令：{command_text}\n"
                     + (f"- Key：{key}\n" if key else "")
                 )
                 extra = (1 if map_blocks else 0) + len(block)
@@ -2036,17 +2410,40 @@ class MemoryHub:
                     if isinstance(metadata.get("feature"), str) and metadata.get("feature")
                     else (key.split(":", 1)[1] if key.casefold().startswith("feature:") else path.stem)
                 )
+                authority = (
+                    str(metadata.get("authority"))
+                    if isinstance(metadata.get("authority"), str) and metadata.get("authority")
+                    else (str(parsed.get("authority") or "") or None)
+                )
+                path_fingerprints = _normalize_path_fingerprints(metadata.get("path_fingerprints"))
+                inspected = _inspect_map_paths(self.root.parent, path_list, path_fingerprints)
+                meta_links = metadata.get("links")
+                link_list: list[dict[str, str]] = []
+                if isinstance(meta_links, list):
+                    for item in meta_links:
+                        if isinstance(item, dict) and item.get("relation") and item.get("target"):
+                            link_list.append(
+                                {"relation": str(item["relation"]), "target": str(item["target"])}
+                            )
                 items.append(
                     {
                         "feature": feature,
                         "key": key or None,
                         "path": path.relative_to(self.root).as_posix(),
                         "role": str(parsed.get("role") or "") or None,
+                        "authority": authority,
                         "paths": path_list,
+                        "path_fingerprints": path_fingerprints,
+                        "missing_paths": inspected["missing"],
+                        "drifted_paths": inspected["drifted"],
                         "commands": [str(item) for item in parsed.get("commands") or []],
+                        "links": link_list,
                         "confidence": metadata.get("confidence")
                         if isinstance(metadata.get("confidence"), str)
                         else "unspecified",
+                        "stale_reason": metadata.get("stale_reason")
+                        if isinstance(metadata.get("stale_reason"), str) and metadata.get("stale_reason")
+                        else None,
                         "memory_id": metadata.get("id") if isinstance(metadata.get("id"), str) else None,
                         "tags": [str(item) for item in tags] if isinstance(tags, list) else [],
                         "feedback_useful": int(metadata.get("feedback_useful") or 0),
@@ -2082,12 +2479,108 @@ class MemoryHub:
             if forgotten_root.exists()
             else 0
         )
+        health = self.map_health(limit=100)
+        counts["map_issues"] = int((health.get("counts") or {}).get("issues") or 0)
+        continue_hints: list[str] = []
+        for item in active_tasks[:8]:
+            task = str(item.get("task") or "")
+            agent = str(item.get("agent") or "")
+            state = str(item.get("state") or "").casefold()
+            if not task or not agent or state in {"completed", "done", "archived"}:
+                continue
+            try:
+                status = self.get_status(task=task, agent=agent)
+            except MemoryHubError:
+                continue
+            pinned = str(status.get("query") or "").strip()
+            if pinned:
+                continue_hints.append(
+                    f'memory-hub orient --task {task} --agent {agent} --query "{pinned}"'
+                )
+            else:
+                continue_hints.append(
+                    f"memory-hub status --task {task} --agent {agent} --query \"…\"  # 先固定检索词"
+                )
+        stale_features = [
+            str(issue.get("feature"))
+            for issue in (health.get("issues") or [])[:5]
+            if issue.get("feature")
+        ]
         return {
             "hub": str(self.root),
             "counts": counts,
             "active_tasks": active_tasks,
             "recent_inbox": inbox,
-            "hint": "先读本 overview 与 INDEX.md，再按任务召回；历史记忆不可覆盖当前指令与仓库事实。",
+            "map_health": {
+                "ok": health.get("ok"),
+                "counts": health.get("counts"),
+                "top_issues": stale_features,
+            },
+            "continue_with": continue_hints,
+            "hint": (
+                "先读 overview；有 continue_with 则用相同 query 开场。"
+                "历史记忆不可覆盖当前指令与仓库事实。"
+            ),
+        }
+
+    def handoff(
+        self,
+        *,
+        task: str,
+        agent: str,
+        to_agent: str | None = None,
+        limit: int = 5,
+    ) -> dict[str, object]:
+        """跨代理交接包：status + 固定检索词 locate + 相关踩坑 + 地图问题。"""
+        self._ensure_initialized()
+        status = self.get_status(task=task, agent=agent)
+        receiver = _safe_segment(to_agent, "代理名") if to_agent else agent
+        query = str(status.get("query") or "").strip()
+        locate: dict[str, object]
+        if query:
+            locate = self.locate_report(query, limit=limit)
+        else:
+            locate = {
+                "query": None,
+                "hits": [],
+                "hint": "该任务未固定检索词；接收方请先 status --query 再 orient。",
+                "count": 0,
+                "draft_upsert": None,
+            }
+        pitfalls: list[dict[str, object]] = []
+        if query:
+            try:
+                pitfalls = search_results_as_dict(
+                    self.recall(query, limit=limit, tag="pitfall", collection="experiences", min_score=1)
+                )
+            except MemoryHubError:
+                pitfalls = []
+        health = self.map_health(limit=100)
+        hit_features = {str(item.get("feature") or "") for item in (locate.get("hits") or [])}
+        related_issues = [
+            issue
+            for issue in (health.get("issues") or [])
+            if str(issue.get("feature") or "") in hit_features
+        ]
+        if not related_issues:
+            related_issues = list(health.get("issues") or [])[:5]
+        suggested = None
+        if query:
+            suggested = (
+                f'memory-hub orient --task {task} --agent {receiver} --query "{query}" '
+                f'--objective "{_one_line(str(status.get("objective") or task))}"'
+            )
+        return {
+            "task": task,
+            "from_agent": agent,
+            "to_agent": receiver,
+            "query": query or None,
+            "status": status,
+            "locate": locate,
+            "pitfalls": pitfalls,
+            "map_issues": related_issues,
+            "suggested_orient": suggested,
+            "hint": "接收方用相同 query 开场；将 status+locate 注入一次，勿叠双前缀。",
         }
 
     def archive(self, task: str) -> dict[str, str]:
@@ -2451,6 +2944,96 @@ class MemoryHub:
             "hint": "将 context 字段整段注入提示；同任务重复开场请复用相同 query。",
         }
 
+    def map_health(self, *, limit: int = 200) -> dict[str, object]:
+        """只读检查功能地图：缺失、漂移、缺指纹、已标 stale。"""
+        self._ensure_initialized()
+        if limit < 1:
+            raise MemoryHubError("limit 必须大于 0")
+        maps = self.list_maps(limit=limit)
+        issues: list[dict[str, object]] = []
+        missing_count = 0
+        drifted_count = 0
+        no_fingerprint_count = 0
+        stale_tagged = 0
+        for item in maps:
+            missing = [str(rel) for rel in (item.get("missing_paths") or [])]
+            drifted = [str(rel) for rel in (item.get("drifted_paths") or [])]
+            fps = item.get("path_fingerprints") or {}
+            paths = [str(rel) for rel in (item.get("paths") or []) if rel]
+            on_disk = [rel for rel in paths if rel not in missing]
+            tags = {str(tag).casefold() for tag in (item.get("tags") or [])}
+            needs_fp = bool(on_disk) and not fps
+            is_stale = "stale" in tags or "disputed" in tags
+            if not (missing or drifted or needs_fp or is_stale):
+                continue
+            if missing:
+                missing_count += 1
+            if drifted:
+                drifted_count += 1
+            if needs_fp:
+                no_fingerprint_count += 1
+            if is_stale:
+                stale_tagged += 1
+            issues.append(
+                {
+                    "feature": item.get("feature"),
+                    "memory_id": item.get("memory_id"),
+                    "key": item.get("key"),
+                    "missing_paths": missing,
+                    "drifted_paths": drifted,
+                    "needs_fingerprint": needs_fp,
+                    "stale_tagged": is_stale,
+                    "stale_reason": item.get("stale_reason"),
+                    "suggested_cli": _map_upsert_cli(
+                        str(item.get("feature") or "feature"),
+                        paths=[p for p in paths if p not in missing][:3] or missing[:2],
+                        role=str(item.get("role") or ""),
+                    ),
+                }
+            )
+        actions: list[dict[str, str]] = []
+        if missing_count or drifted_count:
+            actions.append(
+                {
+                    "id": "evolve-apply",
+                    "command": "memory-hub evolve --apply",
+                    "reason": "将缺失/漂移地图标 stale",
+                }
+            )
+        if no_fingerprint_count:
+            actions.append(
+                {
+                    "id": "backfill-fp",
+                    "command": "memory-hub migrate --backfill-map-fingerprints",
+                    "reason": "批量补录路径指纹",
+                }
+            )
+        for issue in issues[:8]:
+            cli = str(issue.get("suggested_cli") or "")
+            if cli:
+                actions.append(
+                    {
+                        "id": f"repair-{issue.get('feature')}",
+                        "command": cli,
+                        "reason": "刷新该功能地图路径/指纹",
+                    }
+                )
+        return {
+            "ok": not issues,
+            "hub": str(self.root),
+            "counts": {
+                "maps_checked": len(maps),
+                "issues": len(issues),
+                "missing": missing_count,
+                "drifted": drifted_count,
+                "no_fingerprint": no_fingerprint_count,
+                "stale_tagged": stale_tagged,
+            },
+            "issues": issues,
+            "suggested_actions": actions,
+            "hint": "优先按 suggested_actions / issues[].suggested_cli 修复；或 evolve --apply。",
+        }
+
     def close(
         self,
         *,
@@ -2460,8 +3043,10 @@ class MemoryHub:
         pin_core: bool = False,
         promote_inbox: bool = True,
         do_archive: bool = False,
+        check_maps: bool = True,
+        evolve_maps: bool = False,
     ) -> dict[str, object]:
-        """收尾一站式：标记 completed → distill → 可选 archive。"""
+        """收尾一站式：标记 completed → distill → 可选 archive；默认附带地图健康检查。"""
         status = self.update_status(task=task, agent=agent, state="completed")
         distilled = self.distill(
             task=task,
@@ -2471,16 +3056,20 @@ class MemoryHub:
             pin_core=pin_core,
         )
         archived = self.archive(task) if do_archive else None
+        map_report = self.map_health() if check_maps or evolve_maps else None
+        evolved = self.evolve(apply=True) if evolve_maps else None
         return {
             "task": task,
             "agent": agent,
             "status": status,
             "distill": distilled,
             "archive": archived,
+            "map_health": map_report,
+            "evolve": evolved,
         }
 
-    def evolve(self, *, apply: bool = False) -> dict[str, object]:
-        """自我进化扫描：失效地图标 stale；高 useful 巩固；高 wrong 建议 forget。"""
+    def evolve(self, *, apply: bool = False, apply_forget: bool = False) -> dict[str, object]:
+        """自我进化扫描：失效地图标 stale；高 useful 巩固；高 wrong 建议 forget（可选真正 forget）。"""
         self._ensure_initialized()
         planned: list[dict[str, object]] = []
         applied: list[dict[str, object]] = []
@@ -2489,26 +3078,44 @@ class MemoryHub:
         for item in self.list_maps(limit=500):
             memory_id = item.get("memory_id")
             feature = item.get("feature")
-            missing = [
-                rel
-                for rel in (item.get("paths") or [])
-                if rel and not (project_root / str(rel)).exists()
-            ]
+            missing = [str(rel) for rel in (item.get("missing_paths") or [])]
+            drifted = [str(rel) for rel in (item.get("drifted_paths") or [])]
+            if not missing and not drifted:
+                inspected = _inspect_map_paths(
+                    project_root,
+                    [str(rel) for rel in (item.get("paths") or [])],
+                    _normalize_path_fingerprints(item.get("path_fingerprints")),
+                )
+                missing = inspected["missing"]
+                drifted = inspected["drifted"]
             tags = {str(tag).casefold() for tag in (item.get("tags") or [])}
             useful = int(item.get("feedback_useful") or 0)
             wrong = int(item.get("feedback_wrong") or 0)
-            if missing and "stale" not in tags:
+            if (missing or drifted) and "stale" not in tags:
+                reasons: list[str] = []
+                if missing:
+                    reasons.append("缺失：" + "、".join(missing[:5]))
+                if drifted:
+                    reasons.append("漂移：" + "、".join(drifted[:5]))
+                reason = "；".join(reasons)
                 planned.append(
                     {
                         "action": "mark_stale",
                         "feature": feature,
                         "memory_id": memory_id,
                         "missing_paths": missing,
-                        "reason": "关联路径在仓库中不存在",
+                        "drifted_paths": drifted,
+                        "reason": reason,
+                        "suggested_cli": _map_upsert_cli(
+                            str(feature or "feature"),
+                            paths=[p for p in (item.get("paths") or []) if p not in missing][:3],
+                        ),
                     }
                 )
                 if apply and memory_id:
-                    applied.append(self.feedback(signal="stale", memory_id=str(memory_id)))
+                    applied.append(
+                        self.feedback(signal="stale", memory_id=str(memory_id), reason=reason)
+                    )
             if useful >= 3 and str(item.get("confidence") or "") in {"inferred", "tentative", "unspecified"}:
                 planned.append(
                     {
@@ -2519,8 +3126,14 @@ class MemoryHub:
                     }
                 )
                 if apply and memory_id:
-                    self.feedback(signal="useful", memory_id=str(memory_id))
-                    applied.append(self.feedback(signal="useful", memory_id=str(memory_id)))
+                    # 单次 useful 即可触发 feedback 内的 confirmed 提升逻辑
+                    applied.append(
+                        self.feedback(
+                            signal="useful",
+                            memory_id=str(memory_id),
+                            reason="evolve confirm",
+                        )
+                    )
             if wrong >= 2 or "disputed" in tags:
                 planned.append(
                     {
@@ -2530,10 +3143,13 @@ class MemoryHub:
                         "reason": f"feedback_wrong={wrong} 或已 disputed；可 forget",
                     }
                 )
+                if apply and apply_forget and memory_id:
+                    applied.append(self.forget(memory_id=str(memory_id)))
 
         return {
             "hub": str(self.root),
             "apply": apply,
+            "apply_forget": apply_forget,
             "planned": planned,
             "applied": applied,
             "counts": {
@@ -2550,7 +3166,19 @@ class MemoryHub:
         warnings: list[str] = []
         if not self.root.exists():
             issues.append("记忆库目录不存在")
-            return {"ok": False, "hub": str(self.root), "issues": issues, "warnings": warnings}
+            return {
+                "ok": False,
+                "hub": str(self.root),
+                "issues": issues,
+                "warnings": warnings,
+                "fixes": [
+                    {
+                        "id": "init",
+                        "command": "memory-hub init",
+                        "reason": "初始化记忆库",
+                    }
+                ],
+            }
         for name in COLLECTIONS:
             path = self.root / name
             if not path.is_dir():
@@ -2632,9 +3260,10 @@ class MemoryHub:
                         )
             if missing_distill > 5:
                 warnings.append(f"另有 {missing_distill - 5} 个已完成任务缺少 distill 回顾")
-            project_root = self.root.parent
             stale_maps = 0
+            drifted_maps = 0
             disputed_maps = 0
+            no_fp_maps = 0
             for item in self.list_maps(limit=200):
                 tags = {str(tag).casefold() for tag in (item.get("tags") or [])}
                 if "disputed" in tags or "stale" in tags:
@@ -2643,11 +3272,8 @@ class MemoryHub:
                         warnings.append(
                             f"地图 {item.get('feature')} 带有 stale/disputed 标记；可 map upsert 更新或 feedback useful"
                         )
-                missing_paths = [
-                    rel
-                    for rel in (item.get("paths") or [])
-                    if rel and not (project_root / str(rel)).exists()
-                ]
+                missing_paths = [str(rel) for rel in (item.get("missing_paths") or [])]
+                drifted_paths = [str(rel) for rel in (item.get("drifted_paths") or [])]
                 if missing_paths:
                     stale_maps += 1
                     if stale_maps <= 5:
@@ -2655,10 +3281,34 @@ class MemoryHub:
                         warnings.append(
                             f"地图 {item.get('feature')} 关联路径可能失效：{sample}；请 map upsert 修正"
                         )
+                if drifted_paths:
+                    drifted_maps += 1
+                    if drifted_maps <= 5:
+                        sample = "、".join(drifted_paths[:3])
+                        warnings.append(
+                            f"地图 {item.get('feature')} 关联路径内容已漂移：{sample}；请 map upsert 刷新指纹"
+                        )
+                fps = item.get("path_fingerprints") or {}
+                on_disk = [
+                    str(rel)
+                    for rel in (item.get("paths") or [])
+                    if rel and str(rel) not in missing_paths
+                ]
+                if on_disk and not fps:
+                    no_fp_maps += 1
+                    if no_fp_maps <= 5:
+                        warnings.append(
+                            f"地图 {item.get('feature')} 尚无路径指纹；"
+                            "建议 migrate --backfill-map-fingerprints 或 map upsert"
+                        )
             if disputed_maps > 5:
                 warnings.append(f"另有 {disputed_maps - 5} 个地图带 stale/disputed 标记")
             if stale_maps > 5:
                 warnings.append(f"另有 {stale_maps - 5} 个地图存在失效路径")
+            if drifted_maps > 5:
+                warnings.append(f"另有 {drifted_maps - 5} 个地图存在路径漂移")
+            if no_fp_maps > 5:
+                warnings.append(f"另有 {no_fp_maps - 5} 个地图缺少路径指纹")
             # 活动任务缺固定检索词：提醒以利前缀缓存
             missing_query = 0
             for path in (self.root / "sessions").glob("*/*.md"):
@@ -2680,6 +3330,73 @@ class MemoryHub:
             search_file = self._search_index_file()
             if not search_file.is_file():
                 warnings.append("缺少本地检索索引 meta/search-index.json；首次 recall/locate 会自动重建，也可 reindex")
+        fixes: list[dict[str, str]] = []
+        warning_text = "\n".join(str(item) for item in warnings)
+        issue_text = "\n".join(str(item) for item in issues)
+        blob = warning_text + "\n" + issue_text
+        if "migrate" in blob.casefold() or "格式版本" in blob:
+            fixes.append(
+                {
+                    "id": "migrate",
+                    "command": "memory-hub migrate",
+                    "reason": "升级记忆库结构/格式",
+                }
+            )
+        if "backfill-map-fingerprints" in blob or "尚无路径指纹" in blob or "缺少路径指纹" in blob:
+            fixes.append(
+                {
+                    "id": "backfill-fp",
+                    "command": "memory-hub migrate --backfill-map-fingerprints",
+                    "reason": "补录地图路径指纹",
+                }
+            )
+        if "reindex" in blob.casefold() or "检索索引" in blob or "索引可能早于" in blob:
+            fixes.append(
+                {
+                    "id": "reindex",
+                    "command": "memory-hub reindex",
+                    "reason": "重建 Markdown INDEX 与检索索引",
+                }
+            )
+        if "陈旧写锁" in blob:
+            fixes.append(
+                {
+                    "id": "clear-stale-lock",
+                    "command": "memory-hub doctor",
+                    "reason": "确认无其它进程后删除 .memory-hub.lock 再写入",
+                }
+            )
+        if "未固定检索词" in blob:
+            fixes.append(
+                {
+                    "id": "pin-query",
+                    "command": "memory-hub status --task <task> --agent <agent> --query \"…\"",
+                    "reason": "为活动任务固定检索词以护前缀缓存",
+                }
+            )
+        if "失效" in blob or "漂移" in blob or "stale/disputed" in blob:
+            fixes.append(
+                {
+                    "id": "map-health",
+                    "command": "memory-hub map-health",
+                    "reason": "查看可执行 suggested_actions",
+                }
+            )
+            fixes.append(
+                {
+                    "id": "evolve-apply",
+                    "command": "memory-hub evolve --apply",
+                    "reason": "将缺失/漂移地图标 stale",
+                }
+            )
+        if "distill" in blob.casefold() or "retrospective" in blob:
+            fixes.append(
+                {
+                    "id": "distill",
+                    "command": "memory-hub distill --task <task> --agent <agent>",
+                    "reason": "为已完成任务补回顾",
+                }
+            )
         return {
             "ok": not issues,
             "hub": str(self.root),
@@ -2688,6 +3405,7 @@ class MemoryHub:
             "markdown_files": markdown_count,
             "issues": issues,
             "warnings": warnings,
+            "fixes": fixes,
             "stats": stats,
         }
 

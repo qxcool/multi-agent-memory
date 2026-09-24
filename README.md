@@ -1,13 +1,13 @@
 # Multi-Agent Memory
 
-面向 **Claude Code / Codex / Cursor / DeepSeek Harness / OpenCode** 等编码代理，跨 Windows / macOS / Linux 的**本地优先**共享记忆库。
+面向 **Claude Code / Codex / Cursor / DeepSeek Harness / OpenCode / Qoder** 等编码代理，跨 Windows / macOS / Linux 的**本地优先**共享记忆库。
 
-当前版本 **[v0.7.2](https://github.com/qxcool/multi-agent-memory/releases/tag/v0.7.2)**（记忆库格式 0.7.0）。核心交付：
+当前版本 **[v0.7.3](https://github.com/qxcool/multi-agent-memory/releases/tag/v0.7.3)**（记忆库格式 0.7.0）。核心交付：
 
 - **一份 Agent Skill**（`SKILL.md`）— 各宿主共用  
 - **无依赖 Python CLI**（`memory-hub`）— 写锁、校验、分层装配  
-- **可选 MCP**（`memory-hub-mcp`）与 **Cursor hooks**  
-- **多宿主适配** — 见 [`adapters/`](plugins/multi-agent-memory/adapters/README.md)
+- **可选 MCP**（`memory-hub-mcp`）与宿主 hooks  
+- **多宿主适配** — 见 [`adapters/`](plugins/multi-agent-memory/adapters/README.md) 与 [shared-workflow](plugins/multi-agent-memory/adapters/shared-workflow.md)
 
 目标：积累项目记忆、省 token、快速定位功能/文件、自我进化，且**不破坏前缀缓存**。
 
@@ -16,7 +16,7 @@
 在仓库根目录：
 
 ```powershell
-# Windows：安装 CLI，并把 Skill 链接到 Claude / Cursor / DeepSeek / OpenCode
+# Windows：安装 CLI，并把 Skill 链接到 Claude / Cursor / DeepSeek / OpenCode / Qoder
 .\plugins\multi-agent-memory\scripts\install.ps1
 ```
 
@@ -29,7 +29,7 @@ chmod +x ./plugins/multi-agent-memory/scripts/install.sh
 仅部分宿主：
 
 ```powershell
-.\plugins\multi-agent-memory\scripts\install.ps1 -Hosts claude,cursor,deepseek
+.\plugins\multi-agent-memory\scripts\install.ps1 -Hosts claude,cursor,qoder
 ```
 
 然后在项目根：
@@ -64,8 +64,9 @@ memory-hub evolve
 | Cursor | `cursor` |
 | DeepSeek Harness | `deepseek` |
 | OpenCode | `opencode` |
+| Qoder | `qoder` |
 
-全局参数在子命令前。省略 `--hub` 时从当前目录向上查找 `.ai-memory-hub`。
+全局参数在子命令前。省略 `--hub` 时：向上查找 `.ai-memory-hub`，否则使用环境变量 `MEMORY_HUB_ROOT`。
 
 ## 多宿主支持
 
@@ -79,7 +80,10 @@ Skill 正文只有一份：`plugins/multi-agent-memory/skills/multi-agent-memory
 | Cursor | `~/.cursor/skills/…` + hooks/MCP | [adapters/cursor](plugins/multi-agent-memory/adapters/cursor/README.md) |
 | DeepSeek Harness | 优先 `~/.agents/skills/…` | [adapters/deepseek-harness](plugins/multi-agent-memory/adapters/deepseek-harness/README.md) |
 | OpenCode | `~/.agents/skills` 或 `.opencode/skills` | [adapters/opencode](plugins/multi-agent-memory/adapters/opencode/README.md) |
+| Qoder | `~/.qoder/skills/…` | [adapters/qoder](plugins/multi-agent-memory/adapters/qoder/README.md) |
 
+共用节奏（先 locate、勿全仓 rg）：[shared-workflow.md](plugins/multi-agent-memory/adapters/shared-workflow.md)。  
+跨 OS（不限制环境）：[cross-platform.md](plugins/multi-agent-memory/adapters/cross-platform.md)。  
 总览：[adapters/README.md](plugins/multi-agent-memory/adapters/README.md)。
 
 ### Codex
@@ -105,12 +109,14 @@ python -m pip install ./plugins/multi-agent-memory
 }
 ```
 
+Qoder / Claude 等同理，见各自 `adapters/*/mcp.json.example`。
+
 ### 手动 pip（不跑安装脚本时）
 
 ```bash
 python -m pip install ./plugins/multi-agent-memory
 # 或
-pip install "git+https://github.com/qxcool/multi-agent-memory.git@v0.7.2#subdirectory=plugins/multi-agent-memory"
+pip install "git+https://github.com/qxcool/multi-agent-memory.git@v0.7.3#subdirectory=plugins/multi-agent-memory"
 ```
 
 再把 `plugins/multi-agent-memory/skills/multi-agent-memory` 链接/拷贝到对应宿主的 skills 目录。
@@ -123,8 +129,8 @@ pip install "git+https://github.com/qxcool/multi-agent-memory.git@v0.7.2#subdire
 | 本地可审阅 | UTF-8 Markdown；默认 `.gitignore` 阻止误提交 |
 | 分层上下文 | L0 CORE+LESSONS → L0.5 功能地图 → L2 经验；（L1 status 仅放末尾） |
 | 前缀缓存友好 | 固定 `status --query`；选 Top 按分、装配按 key；正文不含分数/置信度 |
-| 功能地图 | `map upsert` / `locate` / `map list`，减少每次扫仓库 |
-| 自我进化 | `feedback` + `evolve`；`doctor` 提示失效路径 / 缺 distill |
+| 功能地图 | `map upsert` / `locate` / `map list` / `map-health`；authority/links；路径指纹漂移检测 |
+| 自我进化 | `feedback` + `evolve`；`close` 默检地图；`migrate --backfill-map-fingerprints` |
 | 本地检索索引 | `meta/search-index.json` 加速 recall/locate（Markdown 仍是真相源） |
 | 零运行时依赖 | 仅需 Python ≥ 3.10；CJK 二元组召回 + 置信度加权 |
 | 并发安全 | 跨平台写锁、原子替换 |

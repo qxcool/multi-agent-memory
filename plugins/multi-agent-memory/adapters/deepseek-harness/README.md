@@ -20,7 +20,15 @@ DeepSeek Harness 按约定发现 Agent Skills（大致优先级）：
 ```
 
 ```powershell
+# Windows
 .\plugins\multi-agent-memory\scripts\install.ps1 -Hosts deepseek
+.\plugins\multi-agent-memory\scripts\install.ps1 -Hosts deepseek -ProjectAgents -SkipPip
+```
+
+```bash
+# macOS / Linux
+./plugins/multi-agent-memory/scripts/install.sh --hosts deepseek
+./plugins/multi-agent-memory/scripts/install.sh --hosts deepseek --project-agents --skip-pip
 ```
 
 也可在项目内：
@@ -29,19 +37,22 @@ DeepSeek Harness 按约定发现 Agent Skills（大致优先级）：
 <workspace>/.agents/skills/multi-agent-memory  →  同上
 ```
 
-CLI 侧：
+## `--agent`
+
+稳定短名：`deepseek`（跨宿主交接同一 task 时勿改）。
+
+## 节奏与定位纪律
+
+见 [../shared-workflow.md](../shared-workflow.md)。摘要：
 
 ```bash
-pip install ./plugins/multi-agent-memory
 memory-hub orient --task <task> --agent deepseek --query "…" --objective "…"
+memory-hub locate --query "…"
+memory-hub close --task <task> --agent deepseek
 ```
 
 ## 其它入口
 
 - Harness：`/skill install github:qxcool/multi-agent-memory`（若宿主支持 GitHub 技能安装，装完后仍建议 `pip install` CLI）
 - 内置目录 `~/.deepseek/skills` 仅在需要隔离时使用；一般不必复制一份
-
-## 说明
-
-- `--agent deepseek` 保持稳定，便于与其它宿主交接同一 task。
-- MCP：若 Harness 支持 stdio MCP，可挂 `memory-hub-mcp`。
+- MCP：见 [mcp.json.example](mcp.json.example) 或 [../mcp.stdio.example.json](../mcp.stdio.example.json)

@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "multi-agent-memory": {
+      "command": "memory-hub-mcp",
+      "args": []
+    }
+  }
+}

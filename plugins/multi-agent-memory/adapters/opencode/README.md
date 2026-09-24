@@ -17,12 +17,29 @@ OpenCode 通常从以下位置发现技能（与 DeepSeek 有重叠）：
 ```
 
 ```powershell
+# Windows
 .\plugins\multi-agent-memory\scripts\install.ps1 -Hosts opencode
 ```
 
+```bash
+# macOS / Linux
+./plugins/multi-agent-memory/scripts/install.sh --hosts opencode
+```
+
+## `--agent`
+
+稳定短名：`opencode`。
+
 ## MCP（可选）
 
-合并进 `%APPDATA%/opencode/opencode.jsonc`（或项目配置），参见 [opencode.jsonc.example](opencode.jsonc.example)：
+配置文件常见位置：
+
+| OS | 用户级（约） |
+|---|---|
+| Windows | `%APPDATA%\opencode\opencode.jsonc` |
+| macOS / Linux | `~/.config/opencode/opencode.jsonc` |
+
+也可写项目级 `opencode.jsonc`。示例见 [opencode.jsonc.example](opencode.jsonc.example)：
 
 ```jsonc
 {
@@ -36,9 +53,14 @@ OpenCode 通常从以下位置发现技能（与 DeepSeek 有重叠）：
 }
 ```
 
-## 节奏
+入口不在 PATH 时：`"command": ["python3", "-m", "multi_agent_memory.mcp_server"]`（Windows 可改 `python`）。
+
+## 节奏与定位纪律
+
+见 [../shared-workflow.md](../shared-workflow.md)。摘要：
 
 ```bash
 memory-hub orient --task <task> --agent opencode --query "…" --objective "…"
+memory-hub locate --query "…"
 memory-hub close --task <task> --agent opencode
 ```

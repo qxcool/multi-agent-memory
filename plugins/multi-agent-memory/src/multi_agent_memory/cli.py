@@ -10,6 +10,8 @@ from .hub import (
     CONFIDENCE_LEVELS,
     FEEDBACK_SIGNALS,
     LIST_COLLECTIONS,
+    LOCATE_HIT_HINT,
+    LOCATE_MISS_HINT,
     MEMORY_TYPES,
     PROMOTE_TARGETS,
     RELATION_TYPES,
@@ -50,7 +52,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--hub",
         default=None,
-        help="记忆库目录；省略或为 .ai-memory-hub 时从当前目录向上查找",
+        help="记忆库目录；省略时：向上查找 .ai-memory-hub，否则用 MEMORY_HUB_ROOT",
     )
     parser.add_argument("--json", action="store_true", help="输出机器可读 JSON")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -164,9 +166,33 @@ def _parser() -> argparse.ArgumentParser:
     close.add_argument("--pin-core", action="store_true")
     close.add_argument("--no-promote-inbox", action="store_true")
     close.add_argument("--archive", action="store_true", help="distill 后归档任务")
+    close.add_argument(
+        "--no-check-maps",
+        action="store_true",
+        help="跳过收尾时的功能地图健康检查",
+    )
+    close.add_argument(
+        "--evolve-maps",
+        action="store_true",
+        help="收尾时对缺失/漂移地图执行 evolve --apply",
+    )
 
     evolve = subparsers.add_parser("evolve", help="自我进化扫描（默认 dry-run；--apply 写入）")
     evolve.add_argument("--apply", action="store_true", help="执行 mark_stale / confirm 等写操作")
+    evolve.add_argument(
+        "--apply-forget",
+        action="store_true",
+        help="与 --apply 联用：对 suggest_forget 项真正执行 forget",
+    )
+
+    handoff = subparsers.add_parser("handoff", help="跨代理交接包：status + locate + 踩坑 + 地图问题")
+    handoff.add_argument("--task", required=True)
+    handoff.add_argument("--agent", required=True, help="交出方代理短名")
+    handoff.add_argument("--to-agent", help="接收方短名（默认与 --agent 相同）")
+    handoff.add_argument("--limit", type=int, default=5)
+
+    map_health = subparsers.add_parser("map-health", help="只读检查功能地图缺失/漂移/缺指纹")
+    map_health.add_argument("--limit", type=int, default=200)
 
     distill = subparsers.add_parser(
         "distill",
@@ -210,6 +236,18 @@ def _parser() -> argparse.ArgumentParser:
         help="相关命令，可重复传入",
     )
     map_upsert.add_argument("--note", default="", help="补充说明")
+    map_upsert.add_argument(
+        "--authority",
+        default="",
+        help="公开契约/权威约束（FRAS 的 A；如 API 约定、兼容边界）",
+    )
+    map_upsert.add_argument(
+        "--link",
+        action="append",
+        type=_parse_link,
+        default=[],
+        help="关系 relation:target，可重复；如 uses:feature:auth-client",
+    )
     map_upsert.add_argument("--source-task")
     map_upsert.add_argument("--confidence", choices=sorted(CONFIDENCE_LEVELS), default="confirmed")
     map_upsert.add_argument(
@@ -228,6 +266,7 @@ def _parser() -> argparse.ArgumentParser:
     feedback.add_argument("--signal", required=True, choices=sorted(FEEDBACK_SIGNALS))
     feedback.add_argument("--id", dest="memory_id")
     feedback.add_argument("--path")
+    feedback.add_argument("--reason", help="stale 时可记录失效原因（写入 stale_reason）")
 
     listing = subparsers.add_parser("list", help="列出集合内容供发现与交接")
     listing.add_argument("collection", choices=sorted(LIST_COLLECTIONS))
@@ -243,6 +282,11 @@ def _parser() -> argparse.ArgumentParser:
         "--backfill-hash",
         action="store_true",
         help="为已有前置元数据但缺少 content_hash 的记忆补哈希",
+    )
+    migrate.add_argument(
+        "--backfill-map-fingerprints",
+        action="store_true",
+        help="为功能地图补录 path_fingerprints（仅元数据，不改正文）",
     )
 
     archive = subparsers.add_parser("archive", help="归档一个活动任务")
@@ -271,22 +315,40 @@ def _status_is_read_only(args: argparse.Namespace) -> bool:
 
 def _print_human(command: str, result: Any) -> None:
     if command == "locate":
-        if not result:
+        hits = result.get("hits") if isinstance(result, dict) else result
+        hint = result.get("hint") if isinstance(result, dict) else None
+        if not hits:
             print("未找到匹配地图/记忆")
+            print(hint or LOCATE_MISS_HINT)
             return
-        for item in result:
+        print(hint or LOCATE_HIT_HINT)
+        for item in hits:
             paths = "；".join(item.get("paths") or []) or "（无路径）"
             commands = "；".join(item.get("commands") or []) or "（无）"
-            print(
-                f"[{item.get('score')}] {item.get('feature') or item.get('key') or item.get('path')}\n"
-                f"职责：{item.get('role') or '（未填写）'}\n"
-                f"路径：{paths}\n"
-                f"命令：{commands}\n"
-                f"文件：{item.get('path')}  置信度：{item.get('confidence')}\n"
+            authority = item.get("authority") or ""
+            lines = [
+                f"[{item.get('score')}] {item.get('feature') or item.get('key') or item.get('path')}",
+                f"职责：{item.get('role') or '（未填写）'}",
+            ]
+            if authority:
+                lines.append(f"权威：{authority}")
+            lines.extend(
+                [
+                    f"路径：{paths}",
+                    f"命令：{commands}",
+                    f"文件：{item.get('path')}  置信度：{item.get('confidence')}",
+                ]
             )
             missing = item.get("missing_paths") or []
+            drifted = item.get("drifted_paths") or []
             if missing:
-                print(f"失效路径：{'；'.join(str(path) for path in missing)}\n")
+                lines.append(f"失效路径：{'；'.join(str(path) for path in missing)}")
+            if drifted:
+                lines.append(f"漂移路径：{'；'.join(str(path) for path in drifted)}")
+            stale_reason = item.get("stale_reason")
+            if stale_reason:
+                lines.append(f"失效原因：{stale_reason}")
+            print("\n".join(lines) + "\n")
         return
     if command == "orient" and isinstance(result, dict):
         print(result.get("context", ""))
@@ -296,17 +358,62 @@ def _print_human(command: str, result: Any) -> None:
         for item in result.get("planned") or []:
             print(f"- {item.get('action')}: {item.get('feature')} — {item.get('reason')}")
         return
+    if command in {"map-health", "close"} and isinstance(result, dict):
+        health = result.get("map_health") if command == "close" else result
+        if command == "close":
+            print(f"task: {result.get('task')}  agent: {result.get('agent')}  state: completed")
+            if result.get("distill"):
+                print(f"distill: {result.get('distill')}")
+            if result.get("archive"):
+                print(f"archive: {result.get('archive')}")
+        if isinstance(health, dict):
+            counts = health.get("counts") or {}
+            print(
+                f"map_health: ok={health.get('ok')}  "
+                f"checked={counts.get('maps_checked')}  issues={counts.get('issues')}  "
+                f"missing={counts.get('missing')}  drifted={counts.get('drifted')}  "
+                f"no_fp={counts.get('no_fingerprint')}"
+            )
+            for item in (health.get("issues") or [])[:10]:
+                bits = []
+                if item.get("missing_paths"):
+                    bits.append("缺失=" + "、".join(str(p) for p in item["missing_paths"][:3]))
+                if item.get("drifted_paths"):
+                    bits.append("漂移=" + "、".join(str(p) for p in item["drifted_paths"][:3]))
+                if item.get("needs_fingerprint"):
+                    bits.append("缺指纹")
+                if item.get("stale_tagged"):
+                    bits.append("已标stale")
+                print(f"- {item.get('feature')}: {'；'.join(bits) or 'issue'}")
+            if health.get("hint"):
+                print(health["hint"])
+        if command == "close" and result.get("evolve"):
+            evolved = result["evolve"]
+            print(f"evolve applied: {evolved.get('counts')}")
+        return
     if command == "map" and isinstance(result, list):
         if not result:
             print("（无功能地图）")
             return
         for item in result:
             paths = "；".join(item.get("paths") or []) or "（无）"
-            print(
-                f"{item.get('feature')}: {item.get('role') or '（未填写）'}\n"
-                f"  路径：{paths}\n"
-                f"  文件：{item.get('path')}  key：{item.get('key')}\n"
-            )
+            authority = item.get("authority") or ""
+            lines = [
+                f"{item.get('feature')}: {item.get('role') or '（未填写）'}",
+            ]
+            if authority:
+                lines.append(f"  权威：{authority}")
+            lines.append(f"  路径：{paths}")
+            missing = item.get("missing_paths") or []
+            drifted = item.get("drifted_paths") or []
+            if missing:
+                lines.append(f"  失效：{'；'.join(str(path) for path in missing)}")
+            if drifted:
+                lines.append(f"  漂移：{'；'.join(str(path) for path in drifted)}")
+            if item.get("stale_reason"):
+                lines.append(f"  失效原因：{item.get('stale_reason')}")
+            lines.append(f"  文件：{item.get('path')}  key：{item.get('key')}")
+            print("\n".join(lines) + "\n")
         return
     if command == "recall":
         if not result:
@@ -352,7 +459,58 @@ def _print_human(command: str, result: Any) -> None:
         print("recent_inbox:")
         for item in result.get("recent_inbox") or []:
             print(f"  - {item.get('path')}: {item.get('title')}")
+        map_health = result.get("map_health") or {}
+        if map_health:
+            print(f"map_health: {map_health.get('counts')}")
+            for feature in map_health.get("top_issues") or []:
+                print(f"  - issue: {feature}")
+        print("continue_with:")
+        for hint in result.get("continue_with") or []:
+            print(f"  - {hint}")
         print(result.get("hint", ""))
+        return
+    if command == "handoff" and isinstance(result, dict):
+        print(f"task: {result.get('task')}  {result.get('from_agent')} -> {result.get('to_agent')}")
+        print(f"query: {result.get('query')}")
+        print(f"suggested_orient: {result.get('suggested_orient')}")
+        locate = result.get("locate") or {}
+        print(f"locate hits: {locate.get('count')}  hint: {locate.get('hint')}")
+        for hit in locate.get("hits") or []:
+            print(f"  - {hit.get('feature')}: {hit.get('paths')}")
+        print("pitfalls:")
+        for item in result.get("pitfalls") or []:
+            snippet = str(item.get("snippet") or "")[:120]
+            print(f"  - {item.get('path')}: {snippet}")
+        print("map_issues:")
+        for issue in result.get("map_issues") or []:
+            print(f"  - {issue.get('feature')}: {issue.get('suggested_cli')}")
+        print(result.get("hint", ""))
+        return
+    if command in {"doctor", "map-health"} and isinstance(result, dict):
+        print(f"ok: {result.get('ok')}  hub: {result.get('hub')}")
+        for key in ("issues", "warnings"):
+            values = result.get(key) or []
+            if values:
+                print(f"{key}:")
+                for item in values:
+                    print(f"  - {item}")
+        actions = result.get("fixes") or result.get("suggested_actions") or []
+        label = "fixes:" if result.get("fixes") is not None else "suggested_actions:"
+        if actions:
+            print(label)
+            for item in actions:
+                print(f"  - [{item.get('id')}] {item.get('command')}  # {item.get('reason')}")
+        if command == "map-health":
+            print(f"counts: {result.get('counts')}")
+            for issue in result.get("issues") or []:
+                print(
+                    f"  - {issue.get('feature')}: missing={issue.get('missing_paths')} "
+                    f"drifted={issue.get('drifted_paths')}"
+                )
+                if issue.get("suggested_cli"):
+                    print(f"    cli: {issue.get('suggested_cli')}")
+        if result.get("hint"):
+            print(result.get("hint"))
         return
     if isinstance(result, dict):
         for key, value in result.items():
@@ -461,9 +619,20 @@ def run(argv: Sequence[str] | None = None) -> int:
                 pin_core=args.pin_core,
                 promote_inbox=not args.no_promote_inbox,
                 do_archive=args.archive,
+                check_maps=not args.no_check_maps,
+                evolve_maps=args.evolve_maps,
             )
         elif args.command == "evolve":
-            result = hub.evolve(apply=args.apply)
+            result = hub.evolve(apply=args.apply, apply_forget=args.apply_forget)
+        elif args.command == "handoff":
+            result = hub.handoff(
+                task=args.task,
+                agent=args.agent,
+                to_agent=args.to_agent,
+                limit=args.limit,
+            )
+        elif args.command == "map-health":
+            result = hub.map_health(limit=args.limit)
         elif args.command == "distill":
             result = hub.distill(
                 task=args.task,
@@ -481,18 +650,25 @@ def run(argv: Sequence[str] | None = None) -> int:
                     paths=args.paths,
                     commands=args.commands,
                     note=args.note,
+                    authority=args.authority,
                     source_task=args.source_task,
                     confidence=args.confidence,
                     merge_paths=not args.replace_paths,
+                    links=args.link,
                 )
             elif args.map_command == "list":
                 result = hub.list_maps()
             else:
                 raise MemoryHubError(f"未知 map 子命令：{args.map_command}")
         elif args.command == "locate":
-            result = hub.locate(args.query, limit=args.limit, min_score=args.min_score)
+            result = hub.locate_report(args.query, limit=args.limit, min_score=args.min_score)
         elif args.command == "feedback":
-            result = hub.feedback(signal=args.signal, memory_id=args.memory_id, path=args.path)
+            result = hub.feedback(
+                signal=args.signal,
+                memory_id=args.memory_id,
+                path=args.path,
+                reason=args.reason,
+            )
         elif args.command == "list":
             result = hub.list_entries(
                 args.collection,
@@ -503,7 +679,11 @@ def run(argv: Sequence[str] | None = None) -> int:
         elif args.command == "overview":
             result = hub.overview()
         elif args.command == "migrate":
-            result = hub.migrate(dry_run=args.dry_run, backfill_hash=args.backfill_hash)
+            result = hub.migrate(
+                dry_run=args.dry_run,
+                backfill_hash=args.backfill_hash,
+                backfill_map_fingerprints=args.backfill_map_fingerprints,
+            )
         elif args.command == "archive":
             result = hub.archive(args.task)
         elif args.command == "reindex":

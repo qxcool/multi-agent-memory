@@ -82,8 +82,13 @@ def build_doc(
     tag_terms = list(dict.fromkeys(tokenize(" ".join(tag_list))))
     path_terms = list(dict.fromkeys(tokenize(relative + " " + " ".join(path_list))))
     role = str(parsed.get("role") or "")
+    authority = (
+        str(metadata.get("authority"))
+        if isinstance(metadata.get("authority"), str)
+        else str(parsed.get("authority") or "")
+    )
     commands = [str(item) for item in parsed.get("commands") or []]
-    map_blob = " ".join([key, feature, role, " ".join(path_list), " ".join(commands)])
+    map_blob = " ".join([key, feature, role, authority, " ".join(path_list), " ".join(commands)])
     map_terms = term_counts(tokenize(map_blob)) if (is_map or path_list) else {}
 
     useful = metadata.get("feedback_useful")
@@ -95,6 +100,14 @@ def build_doc(
         for item in links:
             if isinstance(item, dict) and item.get("target"):
                 link_targets.append(str(item.get("target")))
+    path_fingerprints: dict[str, str] = {}
+    raw_fps = metadata.get("path_fingerprints")
+    if isinstance(raw_fps, dict):
+        for fp_key, fp_val in raw_fps.items():
+            rel = str(fp_key).strip().replace("\\", "/")
+            if rel and isinstance(fp_val, str) and fp_val.strip():
+                path_fingerprints[rel] = fp_val.strip()
+    stale_reason = metadata.get("stale_reason") if isinstance(metadata.get("stale_reason"), str) else ""
     return {
         "path": relative,
         "id": memory_id,
@@ -106,7 +119,10 @@ def build_doc(
         "title": title,
         "is_map": is_map,
         "paths": path_list,
+        "path_fingerprints": path_fingerprints,
         "role": role or None,
+        "authority": authority or None,
+        "stale_reason": stale_reason or None,
         "commands": commands,
         "source_task": metadata.get("source_task") if isinstance(metadata.get("source_task"), str) else None,
         "source_agent": metadata.get("source_agent") if isinstance(metadata.get("source_agent"), str) else None,

@@ -34,6 +34,12 @@ class ScenarioEvals(unittest.TestCase):
             "shared memory",
             "勿再犯",
             "前缀缓存",
+            "防全仓",
+            "GitNexus",
+            "map upsert",
+            "Qoder",
+            "Claude",
+            "any OS",
         ):
             self.assertIn(needle, text)
 
@@ -71,6 +77,69 @@ class ScenarioEvals(unittest.TestCase):
         self.assertEqual(top["feature"], "billing")
         self.assertIn("src/billing/index.ts", top["paths"])
         self.assertTrue((self.root / "meta" / "search-index.json").exists())
+
+    def test_locate_miss_draft_and_related_fras(self) -> None:
+        miss = self.hub.locate_report("totally-unknown-widget-xyz")
+        self.assertEqual(0, miss["count"])
+        self.assertIsNotNone(miss.get("draft_upsert"))
+        self.assertIn("map upsert", str(miss["draft_upsert"].get("suggested_cli")))
+
+        self.hub.upsert_map(
+            agent="claude",
+            feature="auth-client",
+            role="客户端",
+            paths=["src/auth/client.ts"],
+        )
+        self.hub.upsert_map(
+            agent="claude",
+            feature="auth-refresh",
+            role="刷新",
+            paths=["src/auth/refresh.ts"],
+            links=[("uses", "feature:auth-client")],
+        )
+        hits = self.hub.locate("auth-refresh")
+        features = {str(item.get("feature")) for item in hits}
+        self.assertIn("auth-refresh", features)
+        self.assertIn("auth-client", features)
+        related = [item for item in hits if item.get("related_from")]
+        self.assertTrue(related)
+
+    def test_handoff_packet_and_pinned_query_context(self) -> None:
+        self.hub.update_status(
+            task="auth",
+            agent="cursor",
+            objective="修刷新",
+            state="in-progress",
+            query="认证刷新",
+        )
+        self.hub.upsert_map(
+            agent="cursor",
+            feature="auth-refresh",
+            role="刷新",
+            paths=["src/auth/refresh.ts"],
+        )
+        packet = self.hub.handoff(task="auth", agent="cursor", to_agent="claude")
+        self.assertEqual("认证刷新", packet["query"])
+        self.assertEqual("claude", packet["to_agent"])
+        self.assertIn("orient", str(packet.get("suggested_orient")))
+        self.assertGreaterEqual(int(packet["locate"]["count"]), 1)
+
+        resumed = self.hub.context(
+            None,
+            token_budget=800,
+            session_task="auth",
+            session_agent="cursor",
+        )
+        self.assertIn("auth-refresh", resumed)
+
+    def test_doctor_and_map_health_expose_actions(self) -> None:
+        report = self.hub.doctor()
+        self.assertIn("fixes", report)
+        health = self.hub.map_health()
+        self.assertIn("suggested_actions", health)
+        overview = self.hub.overview()
+        self.assertIn("continue_with", overview)
+        self.assertIn("map_health", overview)
 
 
 if __name__ == "__main__":

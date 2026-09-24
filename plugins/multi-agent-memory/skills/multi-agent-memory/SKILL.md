@@ -2,25 +2,39 @@
 name: multi-agent-memory
 description: >-
   项目共享记忆 / shared project memory / AI memory hub / .ai-memory-hub。
-  适用于 Claude Code、Codex、Cursor、DeepSeek Harness、OpenCode 等宿主。
-  开场 orient、收尾 close、自我进化 evolve、功能地图 map、定位文件 locate、
-  踩坑勿再犯、任务交接 handoff、跨会话上下文、前缀缓存友好 context。
-  Use when user mentions shared memory, pitfalls, handoff, locate files/features,
-  reduce tokens, or continuing another agent's work.
+  适用于 Claude Code、Codex、Cursor、DeepSeek Harness、OpenCode、Qoder 等宿主；
+  Windows / macOS / Linux。开场 orient、收尾 close、自我进化 evolve、功能地图 map、
+  定位文件 locate、踩坑勿再犯、任务交接 handoff、跨会话上下文、前缀缓存友好 context。
+  Use with Claude, Codex, Cursor, DeepSeek, OpenCode, or Qoder on any OS when the
+  user mentions shared memory, pitfalls, handoff, locate files/features, reduce
+  tokens, or continuing another agent's work.
 ---
 
 # Multi-Agent Memory
 
-跨 Win / macOS / Linux；兼容 Claude / Codex / Cursor / DeepSeek / OpenCode。  
-用项目内 `.ai-memory-hub` 做可审阅共享记忆。写操作必须走 CLI（写锁）。
+跨 Win / macOS / Linux；兼容 Claude / Codex / Cursor / DeepSeek / OpenCode / Qoder。  
+用可审阅 Markdown 共享记忆。写操作必须走 CLI（写锁）。
 
 ```bash
 python "<skill>/scripts/memory_hub.py" overview
 # 或：memory-hub overview
 ```
 
-下文 `HUB` = `memory-hub` 或上述 python 入口。省略 `--hub` 时向上查找 `.ai-memory-hub`。  
-`--agent` 使用稳定短名：`claude` | `codex` | `cursor` | `deepseek` | `opencode`。
+下文 `HUB` = `memory-hub` 或上述 python 入口。  
+路径解析：`--hub` → 向上查找 `.ai-memory-hub` → 环境变量 `MEMORY_HUB_ROOT`。  
+`--agent` 使用稳定短名：`claude` | `codex` | `cursor` | `deepseek` | `opencode` | `qoder`。  
+共用节奏见插件 `adapters/shared-workflow.md`；**Win/Mac 混用**见 `adapters/cross-platform.md`。
+
+全局库示例（路径按本机改，勿抄另一台机器的盘符）：
+
+```bash
+# Windows PowerShell
+# $env:MEMORY_HUB_ROOT = "D:\…\Agent Memory"
+# macOS / Linux
+# export MEMORY_HUB_ROOT="$HOME/Documents/Agent Memory"
+HUB overview
+HUB --hub "$MEMORY_HUB_ROOT" doctor   # PowerShell 用 "$env:MEMORY_HUB_ROOT"
+```
 
 ## 目标
 
@@ -43,6 +57,15 @@ python "<skill>/scripts/memory_hub.py" overview
 - 勿轻易 `--pin-core`；地图/踩坑用稳定 key 原地更新
 - context 正文不含分数/置信度；L1 只放末尾
 
+### 功能定位（防全仓检索）
+
+1. **先** `HUB locate --query "<功能或路径>"`（或 `orient`/`context` 里的 L0.5）
+2. **命中** → 直接打开返回的 `paths` / 执行 `commands`；**禁止**再全仓 `rg`/`Glob`/`find`
+3. **未命中** → `map upsert` 补地图后再继续；架构/调用链溯源用 **GitNexus**，不要用全仓文本扫代替地图
+4. 改完功能必须 `map upsert`（或收尾 `close` 后按 `map_health` 补写），否则下次仍会 miss
+
+与 GitNexus：`locate`/地图 = 已知功能入口与关联文件；GitNexus = 符号关系与影响面。二者互补，冲突时以仓库源码 + GitNexus 为准，再刷新地图。
+
 ## 自动节奏
 
 ### 1) Orient（推荐一站式）
@@ -59,13 +82,18 @@ HUB orient --task <task> --agent <agent> --query "<固定检索词>" --objective
 ### 2) Handoff
 
 ```bash
+HUB handoff --task <task> --agent <from> --to-agent <to>   # 一站式交接包（推荐）
 HUB status … --append-completed --completed "…"
 HUB remember … --key "pitfall:<主题>" --confidence confirmed --text "现象→原因→做法→勿再犯"
 HUB map upsert --agent <agent> --feature "<名>" --role "…" --path "…" --command "…"
-HUB locate --query "<名或路径>"
+# 可选：--authority "契约" --link "uses:feature:…"
+HUB locate --query "<名或路径>"   # 未命中返回 draft_upsert；命中可含 FRAS 关联地图
 HUB feedback --id mem-… --signal useful|stale|wrong
-HUB evolve                 # dry-run
+HUB evolve                 # dry-run（缺失/漂移 → mark_stale）
 HUB evolve --apply         # 失效地图标 stale；高 useful 巩固
+HUB evolve --apply --apply-forget   # 对 suggest_forget 真正 forget
+HUB doctor                 # 含可执行 fixes
+HUB map-health             # 含 suggested_actions
 ```
 
 ### 3) Close（推荐一站式）
@@ -73,9 +101,11 @@ HUB evolve --apply         # 失效地图标 stale；高 useful 巩固
 ```bash
 HUB close --task <task> --agent <agent>
 HUB close --task <task> --agent <agent> --lesson "一行短教训" --archive
+HUB close --task <task> --agent <agent> --evolve-maps
+HUB map-health
 ```
 
-等价：`status --state completed` → `distill` → 可选 `archive`。
+等价：`status --state completed` → `distill` → 可选 `archive`；默认附带地图健康检查。
 
 ## 其它
 

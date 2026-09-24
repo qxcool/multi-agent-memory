@@ -4,13 +4,15 @@
 
 .EXAMPLE
   .\install.ps1
-  .\install.ps1 -Hosts claude,cursor,deepseek,opencode -SkipPip
+  .\install.ps1 -Hosts claude,cursor,deepseek,opencode,qoder -SkipPip
 #>
 [CmdletBinding()]
 param(
-  [string[]] $Hosts = @("claude", "cursor", "deepseek", "opencode"),
+  [string[]] $Hosts = @("claude", "cursor", "deepseek", "opencode", "qoder"),
   [switch] $SkipPip,
-  [switch] $ProjectAgents
+  [switch] $ProjectAgents,
+  [switch] $ProjectCursor,
+  [switch] $ProjectQoder
 )
 
 $ErrorActionPreference = "Stop"
@@ -55,7 +57,19 @@ function New-SkillLink {
 
 if (-not $SkipPip) {
   Write-Host "Installing Python package from $PluginRoot ..."
-  python -m pip install --upgrade $PluginRoot
+  $py = $null
+  foreach ($candidate in @("python", "python3", "py")) {
+    if (Get-Command $candidate -ErrorAction SilentlyContinue) {
+      $py = $candidate
+      break
+    }
+  }
+  if (-not $py) { throw "Neither python, python3, nor py found on PATH" }
+  if ($py -eq "py") {
+    & $py -3 -m pip install --upgrade $PluginRoot
+  } else {
+    & $py -m pip install --upgrade $PluginRoot
+  }
 }
 
 $map = @{
@@ -66,7 +80,9 @@ $map = @{
     (Join-Path $env:USERPROFILE ".agents\skills\multi-agent-memory"),
     (Join-Path $env:USERPROFILE ".opencode\skills\multi-agent-memory")
   )
+  qoder    = @(Join-Path $env:USERPROFILE ".qoder\skills\multi-agent-memory")
 }
+$known = "claude,cursor,deepseek,opencode,qoder,codex"
 
 foreach ($h in $normalized) {
   if ($h -eq "codex") {
@@ -74,7 +90,7 @@ foreach ($h in $normalized) {
     continue
   }
   if (-not $map.ContainsKey($h)) {
-    Write-Warning "Unknown host '$h' (known: claude,cursor,deepseek,opencode,codex)"
+    Write-Warning "Unknown host '$h' (known: $known)"
     continue
   }
   foreach ($dst in $map[$h]) {
@@ -86,10 +102,20 @@ if ($ProjectAgents) {
   $proj = Join-Path $RepoRoot ".agents\skills\multi-agent-memory"
   New-SkillLink -Destination $proj
 }
+if ($ProjectCursor) {
+  $projC = Join-Path $RepoRoot ".cursor\skills\multi-agent-memory"
+  New-SkillLink -Destination $projC
+}
+if ($ProjectQoder) {
+  $projQ = Join-Path $RepoRoot ".qoder\skills\multi-agent-memory"
+  New-SkillLink -Destination $projQ
+}
 
 Write-Host ""
 Write-Host "Done. Verify:"
 Write-Host "  python -c `"import multi_agent_memory as m; print(m.__version__)`""
 Write-Host "  memory-hub doctor"
-Write-Host "Agent short names: claude | codex | cursor | deepseek | opencode"
+Write-Host "Agent short names: claude | codex | cursor | deepseek | opencode | qoder"
+Write-Host "Shared workflow: $PluginRoot\adapters\shared-workflow.md"
+Write-Host "Cross-platform:  $PluginRoot\adapters\cross-platform.md"
 Write-Host "Adapters: $PluginRoot\adapters\README.md"

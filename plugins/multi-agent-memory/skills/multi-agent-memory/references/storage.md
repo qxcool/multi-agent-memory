@@ -1,9 +1,11 @@
 # 存储格式与兼容约束
 
-记忆库完全由 UTF-8 Markdown 文件组成：
+记忆库完全由 UTF-8 Markdown 文件组成。默认目录名为 `.ai-memory-hub`；也可把任意目录当作库根（例如 Obsidian vault 下的 `Agent Memory/`），通过 `--hub` 或环境变量 `MEMORY_HUB_ROOT` 指定。
+
+路径解析顺序：显式 `--hub` → 从当前目录向上查找 `.ai-memory-hub` → `MEMORY_HUB_ROOT` → 默认 `./.ai-memory-hub`。
 
 ```text
-.ai-memory-hub/
+.ai-memory-hub/   # 或 MEMORY_HUB_ROOT 指向的目录
 ├── memory/        长期核心：CORE / LESSONS（短）+ USER / AGENTS（按需）
 ├── sessions/      活动任务过程（每任务每代理）
 ├── experiences/   完整经验与踩坑（按需召回）
@@ -19,17 +21,24 @@
 ## 本地检索索引
 
 `meta/search-index.json` 是 Markdown 真相源的侧车倒排：`reindex` / 写入路径会重建。`recall` / `locate` 优先用索引缩小候选，再读正文生成 snippet；删除索引会在下次检索时自动重建。
+
 ## 功能地图
 
-`map upsert` 在 `wiki/` 写入结构化地图：
+`map upsert` 在 `wiki/` 写入结构化地图（FRAS 风格）：
 
 - `key`: `feature:<功能名>`
 - `feature`: 功能名
-- `paths`: 仓库相对路径列表（供 `locate` 快速命中）
+- `paths`: 仓库相对路径列表（正斜杠；供 `locate` 快速命中；禁绝对路径，便于 Win/Mac 共用）
+- `path_fingerprints`: 各路径内容指纹（存在时记录；供漂移检测）
+- `authority`: 公开契约/权威约束（可选，对应 FRAS 的 A）
+- `links`: 与其它记忆/功能的强关系（可选，对应 FRAS 的 R）
+- `stale_reason`: 失效原因（`feedback stale` / `evolve` 写入；`map upsert` 刷新时清空）
 - `tags`: 含 `map`、`feature`
-- 正文含职责、关联路径、相关命令、备注
+- 正文含职责、权威、关联路径、相关命令、关系、备注
 
-`locate` 优先匹配地图，返回短结果（职责 + 路径 + 命令），避免把整库灌进上下文。
+`locate` 优先匹配地图，返回短结果（职责 + 路径 + 命令 + `missing_paths` / `drifted_paths`），避免把整库灌进上下文。CLI/MCP 的 `locate_report` 另带 `hint`：命中则勿全仓 rg；未命中请 `map upsert`。
+
+路径漂移：`doctor` / `evolve` / `map-health` / `close` 对比磁盘文件与 `path_fingerprints`；缺失或内容变化会提示，并可 `evolve --apply` 标 `stale`。旧地图无指纹时只检缺失、不报漂移；可用 `migrate --backfill-map-fingerprints` 批量补录。
 
 ## 反馈字段
 
@@ -38,6 +47,7 @@
 - `feedback_useful` / `feedback_stale` / `feedback_wrong`
 - `confidence`（useful 可升至 confirmed；stale/wrong 降权）
 - 标签 `stale` / `disputed`
+- `stale_reason`（`signal=stale` 且提供 `--reason` / evolve 自动写入；`useful` 或 `map upsert` 清空）
 
 ## 结构化记忆元数据
 
@@ -48,7 +58,7 @@
 id: "mem-c41e3c44e7b94e8fbc9c2fc5c366e9ff"
 type: "decision"
 source_task: "auth-refresh"
-source_agent: "cursor"
+source_agent: "claude"   # 任意短名：claude|codex|cursor|deepseek|opencode|qoder
 created_at: "2026-08-29T16:30:00+08:00"
 confidence: "confirmed"
 tags: ["auth", "concurrency"]

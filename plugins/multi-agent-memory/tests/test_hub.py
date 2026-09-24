@@ -111,6 +111,27 @@ class MemoryHubTests(unittest.TestCase):
         found = resolve_hub(start=nested)
         self.assertEqual(self.root.resolve(), found)
 
+    def test_resolve_hub_falls_back_to_memory_hub_root_env(self) -> None:
+        import os
+        import tempfile
+        from multi_agent_memory.hub import resolve_hub
+
+        previous = os.environ.get("MEMORY_HUB_ROOT")
+        with tempfile.TemporaryDirectory() as isolated:
+            elsewhere = Path(isolated) / "elsewhere"
+            elsewhere.mkdir(parents=True)
+            env_root = Path(isolated) / "global-hub"
+            env_root.mkdir(parents=True)
+            try:
+                os.environ["MEMORY_HUB_ROOT"] = str(env_root)
+                found = resolve_hub(start=elsewhere)
+                self.assertEqual(env_root.resolve(), found)
+            finally:
+                if previous is None:
+                    os.environ.pop("MEMORY_HUB_ROOT", None)
+                else:
+                    os.environ["MEMORY_HUB_ROOT"] = previous
+
     def test_promote_moves_inbox_memory_to_experiences(self) -> None:
         remembered = self.hub.remember(
             agent="cursor",
@@ -483,6 +504,87 @@ class MemoryHubTests(unittest.TestCase):
         self.assertTrue(report["ok"])
         self.assertTrue(any("broken-map" in warning and "失效" in warning for warning in report["warnings"]))
 
+    def test_map_paths_normalize_and_reject_absolute(self) -> None:
+        mapped = self.hub.upsert_map(
+            agent="claude",
+            feature="slash-normalize",
+            role="跨 OS 路径",
+            paths=[r"src\auth\refresh.ts", "src/auth/token.ts"],
+        )
+        self.assertEqual(["src/auth/refresh.ts", "src/auth/token.ts"], mapped["paths"])
+        for bad in (r"D:\proj\src\a.ts", "/Users/me/proj/src/a.ts", "C:/proj/a.ts"):
+            with self.assertRaises(MemoryHubError):
+                self.hub.upsert_map(
+                    agent="qoder",
+                    feature="bad-abs",
+                    role="应拒绝",
+                    paths=[bad],
+                )
+
+    def test_map_fras_fields_and_path_drift(self) -> None:
+        project = self.root.parent
+        tracked = project / "src" / "tracked.py"
+        tracked.parent.mkdir(parents=True)
+        tracked.write_text("version-one\n", encoding="utf-8")
+
+        mapped = self.hub.upsert_map(
+            agent="cursor",
+            feature="tracked-feature",
+            role="被跟踪的入口",
+            authority="公开 API 不得静默改签名",
+            paths=["src/tracked.py"],
+            links=[("uses", "feature:auth-client")],
+        )
+        self.assertEqual("公开 API 不得静默改签名", mapped["authority"])
+        self.assertIn("src/tracked.py", mapped["path_fingerprints"])
+        body = Path(str(mapped["path"])).read_text(encoding="utf-8")
+        self.assertIn("- 关联路径：", body)
+        self.assertIn("- 权威：公开 API 不得静默改签名", body)
+        self.assertIn("uses → feature:auth-client", body)
+
+        listed = {item["feature"]: item for item in self.hub.list_maps()}
+        self.assertEqual([], listed["tracked-feature"]["missing_paths"])
+        self.assertEqual([], listed["tracked-feature"]["drifted_paths"])
+        self.assertEqual("公开 API 不得静默改签名", listed["tracked-feature"]["authority"])
+
+        tracked.write_text("version-two\n", encoding="utf-8")
+        drifted = self.hub.list_maps()
+        drift_item = next(item for item in drifted if item["feature"] == "tracked-feature")
+        self.assertIn("src/tracked.py", drift_item["drifted_paths"])
+
+        report = self.hub.doctor()
+        self.assertTrue(any("漂移" in warning and "tracked-feature" in warning for warning in report["warnings"]))
+
+        plan = self.hub.evolve(apply=True)
+        self.assertTrue(
+            any(
+                item["action"] == "mark_stale"
+                and item["feature"] == "tracked-feature"
+                and "src/tracked.py" in (item.get("drifted_paths") or [])
+                for item in plan["planned"]
+            )
+        )
+        maps = {item["feature"]: item for item in self.hub.list_maps()}
+        self.assertIn("stale", {tag.casefold() for tag in maps["tracked-feature"]["tags"]})
+        self.assertIn("漂移", str(maps["tracked-feature"].get("stale_reason") or ""))
+
+        refreshed = self.hub.upsert_map(
+            agent="cursor",
+            feature="tracked-feature",
+            role="被跟踪的入口",
+            paths=["src/tracked.py"],
+        )
+        self.assertEqual("", refreshed.get("stale_reason") or "")
+        self.assertGreaterEqual(int(refreshed.get("feedback_stale") or 0), 1)
+        after = next(item for item in self.hub.list_maps() if item["feature"] == "tracked-feature")
+        self.assertEqual([], after["drifted_paths"])
+        self.assertEqual("", after.get("stale_reason") or "")
+        self.assertNotIn("stale", {tag.casefold() for tag in after["tags"]})
+        self.assertGreaterEqual(int(after.get("feedback_stale") or 0), 1)
+
+        ctx = self.hub.context(query="tracked-feature", max_chars=4000)
+        self.assertIn("权威：公开 API 不得静默改签名", ctx)
+
     def test_map_list_is_stable_by_key(self) -> None:
         self.hub.upsert_map(agent="cursor", feature="zeta", role="z", paths=["README.md"])
         self.hub.upsert_map(agent="cursor", feature="alpha", role="a", paths=["LICENSE"])
@@ -518,11 +620,73 @@ class MemoryHubTests(unittest.TestCase):
         located = self.hub.locate("ghost")
         self.assertTrue(located)
         self.assertIn("no/such/file.py", located[0]["missing_paths"])
+        report = self.hub.locate_report("ghost")
+        self.assertGreaterEqual(report["count"], 1)
+        self.assertIn("paths", str(report["hint"]))
+        miss = self.hub.locate_report("definitely-no-such-feature-xyz")
+        self.assertEqual(0, miss["count"])
+        self.assertIn("map upsert", str(miss["hint"]))
 
         closed = self.hub.close(task="life", agent="cursor", lesson="开场用 orient，收尾用 close")
         self.assertEqual("completed", closed["status"]["state"])
         self.assertTrue(closed["distill"]["lessons_updated"])
         self.assertIsNone(closed["archive"])
+        self.assertIsNotNone(closed.get("map_health"))
+        self.assertIn("counts", closed["map_health"])
+
+    def test_map_health_close_and_migrate_fingerprints(self) -> None:
+        project = self.root.parent
+        tracked = project / "lib" / "mod.py"
+        tracked.parent.mkdir(parents=True)
+        tracked.write_text("alpha\n", encoding="utf-8")
+
+        # 手工写入无指纹的旧地图
+        from multi_agent_memory.hub import _atomic_write, _frontmatter
+
+        wiki = self.root / "wiki" / "feature-legacy-fp.md"
+        meta = {
+            "id": "mem-legacyfp0000000000000000000001",
+            "key": "feature:legacy-fp",
+            "feature": "legacy-fp",
+            "type": "fact",
+            "source_agent": "cursor",
+            "created_at": "2026-01-01T00:00:00+08:00",
+            "updated_at": "2026-01-01T00:00:00+08:00",
+            "confidence": "confirmed",
+            "tags": ["map", "feature"],
+            "links": [],
+            "paths": ["lib/mod.py"],
+            "content_hash": "deadbeefdeadbeef",
+        }
+        body = "# Feature: legacy-fp\n\n- 职责：旧地图\n- 关联路径：\n  - lib/mod.py\n"
+        _atomic_write(wiki, _frontmatter(meta) + body)
+        self.hub.reindex()
+
+        health = self.hub.map_health()
+        self.assertFalse(health["ok"])
+        self.assertGreaterEqual(health["counts"]["no_fingerprint"], 1)
+        self.assertTrue(any(i["feature"] == "legacy-fp" and i["needs_fingerprint"] for i in health["issues"]))
+
+        planned = self.hub.migrate(dry_run=True, backfill_map_fingerprints=True)
+        self.assertTrue(any(str(item).startswith("backfill-map-fp:") for item in planned["planned"]))
+        applied = self.hub.migrate(backfill_map_fingerprints=True)
+        self.assertIn("wiki/feature-legacy-fp.md", applied["map_fingerprints"])
+
+        after = self.hub.map_health()
+        listed = {item["feature"]: item for item in self.hub.list_maps()}
+        self.assertIn("lib/mod.py", listed["legacy-fp"]["path_fingerprints"])
+        self.assertFalse(
+            any(i["feature"] == "legacy-fp" and i["needs_fingerprint"] for i in after["issues"])
+        )
+
+        closed = self.hub.close(task="fp-task", agent="cursor", check_maps=True)
+        self.assertIsNotNone(closed["map_health"])
+        self.assertIsNone(closed["evolve"])
+
+        self.hub.upsert_map(agent="cursor", feature="ghost-close", role="x", paths=["no/file.py"])
+        evolved_close = self.hub.close(task="fp-task2", agent="cursor", evolve_maps=True)
+        self.assertIsNotNone(evolved_close["evolve"])
+        self.assertGreaterEqual(evolved_close["evolve"]["counts"]["mark_stale"], 1)
 
     def test_context_session_trailer_does_not_reorder_prefix(self) -> None:
         self.hub.upsert_map(
