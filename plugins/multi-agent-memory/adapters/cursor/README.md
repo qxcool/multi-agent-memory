@@ -19,7 +19,8 @@
 ./plugins/multi-agent-memory/scripts/install.sh --hosts cursor --project-cursor --skip-pip
 ```
 
-项目级也可手动放在 `<repo>/.cursor/skills/multi-agent-memory`。
+项目级也可手动放在 `<repo>/.cursor/skills/multi-agent-memory`。  
+安装后 Cursor 即可发现本 Skill，**不必**在项目 `AGENTS.md` 再注册。hooks / MCP 仍需按下面可选步骤配置。
 
 ## `--agent`
 
@@ -28,18 +29,21 @@
 ## Hooks（项目级，可选）
 
 ```powershell
-# Windows
+# Windows（一键）
+.\plugins\multi-agent-memory\scripts\install.ps1 -Hosts cursor -CursorHooks
+# 或手动：
 New-Item -ItemType Directory -Force .cursor\hooks | Out-Null
 Copy-Item plugins\multi-agent-memory\adapters\cursor\hooks\*.py .cursor\hooks\
 Copy-Item plugins\multi-agent-memory\adapters\cursor\hooks.json .cursor\hooks.json
 ```
 
 ```bash
-# macOS / Linux
+# macOS / Linux（一键；仅有 python3 时会改 hooks.json）
+./plugins/multi-agent-memory/scripts/install.sh --hosts cursor --cursor-hooks
+# 或手动：
 mkdir -p .cursor/hooks
 cp plugins/multi-agent-memory/adapters/cursor/hooks/*.py .cursor/hooks/
 cp plugins/multi-agent-memory/adapters/cursor/hooks.json .cursor/hooks.json
-# 若本机只有 python3：把 hooks.json 里的 python 改成 python3
 ```
 
 或编辑 `.cursor/hooks.json`（默认 `python`；Unix 常改为 `python3`）：
@@ -60,8 +64,8 @@ cp plugins/multi-agent-memory/adapters/cursor/hooks.json .cursor/hooks.json
 
 行为：
 
-- `sessionStart`：短提醒（先 locate、命中勿 rg、与 GitNexus 分工）+ `MEMORY_HUB_ROOT` / `MEMORY_HUB_SKILL`
-- `stop`：默认不跟进；`MEMORY_HUB_STOP_FOLLOWUP=1` 时提示 close / map upsert / evolve（`loop_limit: 1`）
+- `sessionStart`：短提醒 + 若有 hub 则**只读** `meta/map-status.json` 缓存（不扫盘）+ `MEMORY_HUB_ROOT` / `MEMORY_HUB_SKILL`
+- `stop`：**默认跟进** sync/close + draft_upserts；`MEMORY_HUB_STOP_FOLLOWUP=0` 关闭（`loop_limit: 1`）
 
 > 部分 Cursor 版本对 `sessionStart.additional_context` 有竞态；完整上下文请用 `memory-hub orient`。
 

@@ -6,16 +6,28 @@ import json
 from pathlib import Path
 from typing import Any, Callable, Iterable, Sequence
 
-SEARCH_INDEX_VERSION = 1
+SEARCH_INDEX_VERSION = 3
 SEARCH_INDEX_RELATIVE = "meta/search-index.json"
+SEARCH_DIRTY_RELATIVE = "meta/search-index.dirty"
+_SKIP_PARTS = frozenset({"node_modules", ".git", "meta"})
 
 
 def search_index_path(root: Path) -> Path:
     return root / SEARCH_INDEX_RELATIVE
 
 
+def dirty_marker_path(root: Path) -> Path:
+    return root / SEARCH_DIRTY_RELATIVE
+
+
 def empty_index() -> dict[str, Any]:
-    return {"version": SEARCH_INDEX_VERSION, "built_at": "", "docs": {}}
+    return {
+        "version": SEARCH_INDEX_VERSION,
+        "built_at": "",
+        "docs": {},
+        "source_count": 0,
+        "source_max_mtime_ns": 0,
+    }
 
 
 def load_index(path: Path) -> dict[str, Any]:
@@ -29,12 +41,47 @@ def load_index(path: Path) -> dict[str, Any]:
         return empty_index()
     payload.setdefault("version", SEARCH_INDEX_VERSION)
     payload.setdefault("built_at", "")
+    payload.setdefault("source_count", 0)
+    payload.setdefault("source_max_mtime_ns", 0)
     return payload
 
 
 def save_index(path: Path, payload: dict[str, Any], *, atomic_write: Callable[[Path, str], None]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     atomic_write(path, json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
+
+
+def compute_source_watermark(root: Path) -> dict[str, int]:
+    """单次 rglob+stat：文件数与最大 mtime，供新鲜度比对（不做逐文件成员检查）。"""
+    count = 0
+    max_mtime = 0
+    try:
+        paths = root.rglob("*.md")
+    except OSError:
+        return {"source_count": 0, "source_max_mtime_ns": 0}
+    for path in paths:
+        if path.name == "INDEX.md":
+            continue
+        try:
+            relative = path.relative_to(root)
+        except ValueError:
+            continue
+        if any(part in _SKIP_PARTS for part in relative.parts):
+            continue
+        try:
+            mtime = path.stat().st_mtime_ns
+        except OSError:
+            continue
+        count += 1
+        if mtime > max_mtime:
+            max_mtime = mtime
+    return {"source_count": count, "source_max_mtime_ns": max_mtime}
+
+
+def watermark_matches(payload: dict[str, Any], watermark: dict[str, int]) -> bool:
+    return int(payload.get("source_count") or -1) == int(watermark.get("source_count") or -2) and int(
+        payload.get("source_max_mtime_ns") or -1
+    ) == int(watermark.get("source_max_mtime_ns") or -2)
 
 
 def term_counts(tokens: Iterable[str]) -> dict[str, int]:
@@ -96,10 +143,14 @@ def build_doc(
     wrong = metadata.get("feedback_wrong")
     links = metadata.get("links")
     link_targets: list[str] = []
+    link_edges: list[dict[str, str]] = []
     if isinstance(links, list):
         for item in links:
             if isinstance(item, dict) and item.get("target"):
-                link_targets.append(str(item.get("target")))
+                target = str(item.get("target"))
+                relation = str(item.get("relation") or "related_to")
+                link_targets.append(target)
+                link_edges.append({"relation": relation, "target": target})
     path_fingerprints: dict[str, str] = {}
     raw_fps = metadata.get("path_fingerprints")
     if isinstance(raw_fps, dict):
@@ -108,6 +159,7 @@ def build_doc(
             if rel and isinstance(fp_val, str) and fp_val.strip():
                 path_fingerprints[rel] = fp_val.strip()
     stale_reason = metadata.get("stale_reason") if isinstance(metadata.get("stale_reason"), str) else ""
+    content_hash = metadata.get("content_hash") if isinstance(metadata.get("content_hash"), str) else None
     return {
         "path": relative,
         "id": memory_id,
@@ -115,6 +167,8 @@ def build_doc(
         "confidence": confidence,
         "tags": tag_list,
         "key": key or None,
+        "has_frontmatter": bool(metadata),
+        "content_hash": content_hash,
         "feature": feature,
         "title": title,
         "is_map": is_map,
@@ -128,6 +182,7 @@ def build_doc(
         "source_agent": metadata.get("source_agent") if isinstance(metadata.get("source_agent"), str) else None,
         "created_at": metadata.get("created_at") if isinstance(metadata.get("created_at"), str) else None,
         "links": link_targets,
+        "link_edges": link_edges,
         "feedback_useful": int(useful) if isinstance(useful, int) else 0,
         "feedback_stale": int(stale) if isinstance(stale, int) else 0,
         "feedback_wrong": int(wrong) if isinstance(wrong, int) else 0,

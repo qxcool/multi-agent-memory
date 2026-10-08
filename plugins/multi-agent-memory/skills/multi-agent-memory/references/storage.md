@@ -12,15 +12,22 @@
 ├── wiki/          项目知识条目
 ├── inbox/         尚未整理的候选记忆
 ├── archive/       已归档任务与 forgotten/
-├── meta/          侧车索引（如 search-index.json，可再生）
+├── meta/
+│   ├── search-index.json   侧车检索索引（可再生）
+│   └── map-status.json     上次 map_health/sync 的对齐态缓存（可再生）
 └── INDEX.md       总索引（含活动任务速览）
 ```
 
-任务文件沿用旧版字段：`目标`、`步骤`、`已完成`、`当前状态`、`阻塞`、`下一步`，并新增可选 `检索词`（`status --query`，用于固定 context 前缀）。可读旧版手工 Markdown，不会自动改写正文。写操作走 CLI：`status`、`remember`、`map upsert`、`feedback`、`distill`、`promote`、`forget`、`reindex`、`archive` 等。
+任务文件沿用旧版字段：`目标`、`步骤`、`已完成`、`当前状态`、`阻塞`、`下一步`，并新增可选 `检索词`（`status --query`，用于固定 context 前缀）。可读旧版手工 Markdown，不会自动改写正文。写操作走 CLI：`status`、`remember`、`map upsert`、`feedback`、`distill`、`promote`、`forget`、`reindex`、`archive`、`sync` 等。
 
 ## 本地检索索引
 
 `meta/search-index.json` 是 Markdown 真相源的侧车倒排：`reindex` / 写入路径会重建。`recall` / `locate` 优先用索引缩小候选，再读正文生成 snippet；删除索引会在下次检索时自动重建。
+
+## map-status 缓存
+
+`map-health` / `sync` 写入 `meta/map-status.json`（`map_status`、counts、issue_features、updated_at）。  
+Cursor `sessionStart` 与 `read_map_status_cache()` **只读该文件**，避免开场全库扫盘 + 指纹。删除后下次 `map-health`/`sync` 会重建。
 
 ## 功能地图
 
@@ -38,7 +45,8 @@
 
 `locate` 优先匹配地图，返回短结果（职责 + 路径 + 命令 + `missing_paths` / `drifted_paths`），避免把整库灌进上下文。CLI/MCP 的 `locate_report` 另带 `hint`：命中则勿全仓 rg；未命中请 `map upsert`。
 
-路径漂移：`doctor` / `evolve` / `map-health` / `close` 对比磁盘文件与 `path_fingerprints`；缺失或内容变化会提示，并可 `evolve --apply` 标 `stale`。旧地图无指纹时只检缺失、不报漂移；可用 `migrate --backfill-map-fingerprints` 批量补录。
+路径漂移：`map-health` / `sync` / `close`（默认 sync）对比磁盘与 `path_fingerprints`；汇总 `map_status`（`aligned`|`drifted`|`incomplete`）与 `draft_upserts`。`doctor` **复用** `map_health`，不再单独扫一遍地图。  
+`sync` / `evolve --apply`：锁外规划，**一把写锁**内批量标 stale/confirm（可选 forget），索引只更新一次（`sync` 末尾完整 `reindex`）。旧地图无指纹时只检缺失、不报漂移；可用 `migrate --backfill-map-fingerprints` 批量补录。
 
 ## 反馈字段
 
@@ -75,7 +83,7 @@ links: [{"relation": "requires", "target": "mem-auth-client"}]
 - `content_hash` 为正文规范化短哈希，用于去重。
 - `distill` 默认写 `experiences/` 软回顾（`inferred` / `auto-summary` / `key=retrospective:…`），不自动改 LESSONS/CORE。
 - `context` 固定顺序：notice → L0 → L0.5 地图（按 feature key）→ L2（先按分取 Top，再按 key/id 装配）→ 可选 L1（仅末尾）。正文不含分数/原因/置信度。默认排除 auto-summary。
-- `orient` / `close` / `evolve`：开场、收尾、自我进化一站式命令。
+- `orient` / `sync` / `close` / `evolve`：开场、机械同步、收尾、自我进化。`orient` 无库可 init；`close` 默认 sync；语义补写仍靠 Agent。
 - `forget` 将条目移入 `archive/forgotten/`，默认召回与列表不展示。
 
 没有前置元数据的旧文件按 `legacy` 类型参与检索。`doctor` 和 `stats` 可以报告覆盖率，但不会自动改写旧文件。

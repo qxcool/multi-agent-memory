@@ -521,6 +521,38 @@ class MemoryHubTests(unittest.TestCase):
                     paths=[bad],
                 )
 
+    def test_map_paths_strip_worktree_prefix_for_agents(self) -> None:
+        from multi_agent_memory.maps import _inspect_map_paths, _normalize_repo_path
+
+        project = self.root.parent
+        (project / "src").mkdir(parents=True, exist_ok=True)
+        (project / "src" / "hub.py").write_text("ok\n", encoding="utf-8")
+        (project / "README.md").write_text("# r\n", encoding="utf-8")
+
+        self.assertEqual("src/hub.py", _normalize_repo_path(".worktree/agent-a/src/hub.py"))
+        self.assertEqual("README.md", _normalize_repo_path(".worktrees/run-1/README.md"))
+        mapped = self.hub.upsert_map(
+            agent="cursor",
+            feature="wt-norm",
+            role="工作树归一",
+            paths=[".worktree/agent-a/src/hub.py", ".worktrees/run-1/README.md"],
+        )
+        self.assertEqual(["src/hub.py", "README.md"], mapped["paths"])
+        self.assertIn("src/hub.py", mapped.get("path_fingerprints") or {})
+
+        for bad in ("pkg/.worktree/copy.py", "node_modules/pkg/index.js", ".worktree/only"):
+            with self.assertRaises(MemoryHubError):
+                _normalize_repo_path(bad)
+
+        # 旧地图残留工作树路径：巡检忽略，不记 missing/drifted
+        inspected = _inspect_map_paths(
+            project,
+            [".worktree/ghost.py", "does/not/exist.py"],
+            {".worktree/ghost.py": "deadbeefdeadbeef"},
+        )
+        self.assertEqual(["does/not/exist.py"], inspected["missing"])
+        self.assertEqual([], inspected["drifted"])
+
     def test_map_fras_fields_and_path_drift(self) -> None:
         project = self.root.parent
         tracked = project / "src" / "tracked.py"
@@ -633,6 +665,9 @@ class MemoryHubTests(unittest.TestCase):
         self.assertIsNone(closed["archive"])
         self.assertIsNotNone(closed.get("map_health"))
         self.assertIn("counts", closed["map_health"])
+        self.assertIn(closed.get("map_status"), {"aligned", "drifted", "incomplete"})
+        self.assertIn("maintenance_required", closed)
+        self.assertIsInstance(closed.get("draft_upserts"), list)
 
     def test_map_health_close_and_migrate_fingerprints(self) -> None:
         project = self.root.parent
@@ -684,9 +719,12 @@ class MemoryHubTests(unittest.TestCase):
 
         health = self.hub.map_health()
         self.assertFalse(health["ok"])
+        self.assertEqual("incomplete", health["map_status"])
         self.assertGreaterEqual(health["counts"]["no_fingerprint"], 1)
         self.assertTrue(any(i["feature"] == "legacy-fp" and i["needs_fingerprint"] for i in health["issues"]))
         self.assertFalse(any(i["feature"] == "docs-dir" and i.get("needs_fingerprint") for i in health["issues"]))
+        self.assertTrue(any(d.get("feature") == "legacy-fp" for d in health["draft_upserts"]))
+        self.assertIn("suggested_cli", health["draft_upserts"][0])
 
         planned = self.hub.migrate(dry_run=True, backfill_map_fingerprints=True)
         self.assertTrue(any(str(item).startswith("backfill-map-fp:") for item in planned["planned"]))
@@ -702,12 +740,78 @@ class MemoryHubTests(unittest.TestCase):
 
         closed = self.hub.close(task="fp-task", agent="cursor", check_maps=True)
         self.assertIsNotNone(closed["map_health"])
-        self.assertIsNone(closed["evolve"])
+        self.assertIsNotNone(closed.get("sync"))
+        self.assertIsNotNone(closed["sync"].get("reindex"))
+        self.assertIn("companions", closed["sync"])
 
         self.hub.upsert_map(agent="cursor", feature="ghost-close", role="x", paths=["no/file.py"])
         evolved_close = self.hub.close(task="fp-task2", agent="cursor", evolve_maps=True)
         self.assertIsNotNone(evolved_close["evolve"])
         self.assertGreaterEqual(evolved_close["evolve"]["counts"]["mark_stale"], 1)
+        self.assertTrue(evolved_close["maintenance_required"])
+        self.assertEqual("drifted", evolved_close["map_status"])
+        self.assertTrue(any(d.get("feature") == "ghost-close" for d in evolved_close["draft_upserts"]))
+
+        doctor = self.hub.doctor()
+        self.assertIn(doctor.get("map_status"), {"aligned", "drifted", "incomplete"})
+        self.assertIn("companions", doctor)
+        oriented = self.hub.orient(
+            task="orient-map",
+            agent="cursor",
+            query="ghost-close",
+            objective="check map_status",
+        )
+        self.assertEqual(oriented.get("map_status"), doctor.get("map_status"))
+
+    def test_sync_and_companions_probe(self) -> None:
+        from multi_agent_memory.hub import probe_companions
+
+        project = self.root.parent
+        tracked = project / "svc" / "api.py"
+        tracked.parent.mkdir(parents=True)
+        tracked.write_text("v1\n", encoding="utf-8")
+        self.hub.upsert_map(agent="cursor", feature="api", role="api", paths=["svc/api.py"])
+        tracked.write_text("v2\n", encoding="utf-8")
+
+        checked = self.hub.sync(check_only=True)
+        self.assertTrue(checked["check_only"])
+        self.assertIn(checked["map_status"], {"aligned", "drifted", "incomplete"})
+        self.assertIn("companions", checked)
+        self.assertIn("gitnexus", checked["companions"])
+        self.assertIn("aoci", checked["companions"])
+        cache = self.hub.read_map_status_cache()
+        self.assertIsNotNone(cache)
+        self.assertEqual(cache.get("map_status"), checked["map_status"])
+
+        synced = self.hub.sync()
+        self.assertFalse(synced["check_only"])
+        self.assertIsNotNone(synced["reindex"])
+        self.assertIsNotNone(synced["evolve"])
+        self.assertTrue(synced["evolve"]["apply"])
+        self.assertGreaterEqual(int(synced["evolve"]["counts"]["mark_stale"]), 1)
+        self.assertTrue(synced["maintenance_required"] or synced["map_status"] == "aligned")
+        self.assertTrue(
+            any(d.get("feature") == "api" for d in synced["draft_upserts"])
+            or synced["map_status"] == "aligned"
+        )
+
+        companions = probe_companions(project_root=project)
+        self.assertIn(companions["gitnexus"]["status"], {"available", "missing"})
+        self.assertIn(companions["aoci"]["status"], {"available", "missing"})
+        # 无二进制时必须 missing，不得抛错
+        self.assertIsInstance(companions["hint"], str)
+
+    def test_doctor_reuses_map_health_status(self) -> None:
+        project = self.root.parent
+        tracked = project / "svc" / "gone.py"
+        tracked.parent.mkdir(parents=True)
+        tracked.write_text("x\n", encoding="utf-8")
+        self.hub.upsert_map(agent="cursor", feature="gone", role="x", paths=["svc/gone.py"])
+        tracked.unlink()
+        health = self.hub.map_health()
+        doctor = self.hub.doctor()
+        self.assertEqual(doctor.get("map_status"), health.get("map_status"))
+        self.assertTrue(any("map_status=" in str(w) for w in doctor.get("warnings") or []))
 
     def test_context_session_trailer_does_not_reorder_prefix(self) -> None:
         self.hub.upsert_map(
@@ -1160,6 +1264,78 @@ class MemoryHubTests(unittest.TestCase):
             encoding="utf-8",
         )
         self.assertEqual("experiences", json.loads(promoted.stdout)["collection"])
+
+    def test_search_dirty_and_find_by_key_uses_index(self) -> None:
+        remembered = self.hub.remember(
+            agent="cursor",
+            text="索引查找专用",
+            key="pitfall:index-key",
+            memory_type="event",
+            tags=["pitfall"],
+        )
+        dirty = self.root / "meta" / "search-index.dirty"
+        self.assertTrue(dirty.is_file())
+        found = self.hub._find_by_key("pitfall:index-key")
+        self.assertIsNotNone(found)
+        self.assertEqual(Path(remembered["path"]).resolve(), found.resolve())
+        self.assertFalse(dirty.is_file())
+        index = json.loads((self.root / "meta" / "search-index.json").read_text(encoding="utf-8"))
+        self.assertEqual(3, int(index.get("version") or 0))
+        self.assertIn("source_count", index)
+        # 新鲜时不再因逐文件成员检查失效；同进程复用缓存对象
+        again = self.hub._search_docs()
+        self.assertTrue(again)
+        self.assertIs(again, self.hub._search_docs())
+
+    def test_clean_auto_forgets_high_confidence_wrong_memories(self) -> None:
+        remembered = self.hub.remember(
+            agent="cursor",
+            text="错误结论应被清理",
+            key="pitfall:bad-claim",
+            memory_type="event",
+            tags=["pitfall"],
+        )
+        mid = str(remembered["id"])
+        self.hub.feedback(signal="wrong", memory_id=mid)
+        dry_one = self.hub.clean(apply=False)
+        self.assertEqual(0, dry_one["counts"]["candidates"])
+        self.hub.feedback(signal="wrong", memory_id=mid)
+        dry = self.hub.clean(apply=False)
+        self.assertEqual(1, dry["counts"]["candidates"])
+        self.assertTrue(dry["candidates"][0].get("auto_forget"))
+        applied = self.hub.clean(apply=True)
+        self.assertEqual(1, applied["counts"]["forgotten"])
+        forgotten_path = self.root / "archive" / "forgotten"
+        forgotten_files = list(forgotten_path.glob("*.md"))
+        self.assertTrue(forgotten_files)
+        with self.assertRaises(MemoryHubError):
+            self.hub.feedback(signal="useful", memory_id=mid)
+        # forget 后同 key 应新建 inbox，不得原地改写 archive/forgotten
+        revived = self.hub.remember(
+            agent="cursor",
+            text="纠正后的结论",
+            key="pitfall:bad-claim",
+            memory_type="event",
+            tags=["pitfall"],
+        )
+        revived_path = Path(str(revived["path"])).resolve()
+        self.assertIn("/inbox/", revived_path.as_posix())
+        self.assertNotEqual(forgotten_files[0].resolve(), revived_path)
+        found = self.hub._find_by_key("pitfall:bad-claim")
+        self.assertIsNotNone(found)
+        self.assertEqual(found.resolve(), revived_path)  # type: ignore[union-attr]
+
+    def test_map_maintain_targets_changed_paths(self) -> None:
+        project = self.root.parent
+        tracked = project / "pkg" / "a.py"
+        tracked.parent.mkdir(parents=True)
+        tracked.write_text("1\n", encoding="utf-8")
+        self.hub.upsert_map(agent="cursor", feature="pkg-a", role="a", paths=["pkg/a.py"])
+        self.hub.upsert_map(agent="cursor", feature="other", role="o", paths=["README.md"])
+        result = self.hub.map_maintain(paths=["pkg/a.py"])
+        self.assertEqual(1, result["matched_count"])
+        self.assertTrue(any(d.get("feature") == "pkg-a" for d in result["draft_upserts"]))
+        self.assertFalse(any(d.get("feature") == "other" for d in result["draft_upserts"]))
 
 
 if __name__ == "__main__":

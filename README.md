@@ -2,7 +2,7 @@
 
 面向 **Claude Code / Codex / Cursor / DeepSeek Harness / OpenCode / Qoder** 等编码代理，跨 Windows / macOS / Linux 的**本地优先**共享记忆库。
 
-当前版本 **[v0.7.4](https://github.com/qxcool/multi-agent-memory/releases/tag/v0.7.4)**（记忆库格式 0.7.0）。核心交付：
+当前版本 **v0.7.6**（记忆库格式 0.7.0）。核心交付：
 
 - **一份 Agent Skill**（`SKILL.md`）— 各宿主共用  
 - **无依赖 Python CLI**（`memory-hub`）— 写锁、校验、分层装配  
@@ -32,12 +32,16 @@ chmod +x ./plugins/multi-agent-memory/scripts/install.sh
 .\plugins\multi-agent-memory\scripts\install.ps1 -Hosts claude,cursor,qoder
 ```
 
+安装后 Skill 已链到各宿主 skills 目录，**不必**再改项目 `AGENTS.md` 才能启用。  
+（MCP / Cursor hooks 仍为可选 sidecar，见 adapters。）
+
 然后在项目根：
 
 ```bash
-memory-hub init                 # 新项目
+memory-hub init                 # 新项目；orient 时若无库也会 init
 memory-hub migrate              # 旧库 → 格式 0.7.0
 memory-hub doctor
+memory-hub sync --check         # map_status / companions（只读）
 ```
 
 推荐一站式节奏（`--agent` 用稳定短名）：
@@ -53,8 +57,8 @@ memory-hub remember --agent cursor --source-task demo --type event --tags "pitfa
   --key "pitfall:demo" --text "现象 → 原因 → 做法 → 勿再犯"
 memory-hub feedback --id mem-xxxxxxxx --signal useful
 
-memory-hub close --task demo --agent cursor --lesson "一行短教训"
-memory-hub evolve
+memory-hub sync                 # 变动后：批量 evolve + 一次 reindex
+memory-hub close --task demo --agent cursor --lesson "一行短教训"   # 默认含 sync
 ```
 
 | 宿主 | `--agent` |
@@ -110,14 +114,14 @@ python -m pip install ./plugins/multi-agent-memory
 ```
 
 也可用 `memory-hub-mcp`。Qoder / Claude / OpenCode 等同理，见各自 `adapters/*/mcp.json.example`。  
-MCP 工具一览（15 个）：[mcp-tools.md](plugins/multi-agent-memory/skills/multi-agent-memory/references/mcp-tools.md)。
+MCP 工具一览（19 个）：[mcp-tools.md](plugins/multi-agent-memory/skills/multi-agent-memory/references/mcp-tools.md)。
 
 ### 手动 pip（不跑安装脚本时）
 
 ```bash
 python -m pip install ./plugins/multi-agent-memory
 # 或
-pip install "git+https://github.com/qxcool/multi-agent-memory.git@v0.7.4#subdirectory=plugins/multi-agent-memory"
+pip install "git+https://github.com/qxcool/multi-agent-memory.git@v0.7.6#subdirectory=plugins/multi-agent-memory"
 ```
 
 再把 `plugins/multi-agent-memory/skills/multi-agent-memory` 链接/拷贝到对应宿主的 skills 目录。
@@ -130,10 +134,12 @@ pip install "git+https://github.com/qxcool/multi-agent-memory.git@v0.7.4#subdire
 | 本地可审阅 | UTF-8 Markdown；默认 `.gitignore` 阻止误提交 |
 | 分层上下文 | L0 CORE+LESSONS → L0.5 功能地图 → L2 经验；（L1 status 仅放末尾） |
 | 前缀缓存友好 | 固定 `status --query`；选 Top 按分、装配按 key；正文不含分数/置信度 |
-| 功能地图 | `map upsert` / `locate`（含 scope）/ `map coverage` / `map seed` / `map-health`；authority/links；仅文件路径指纹 |
-| 自我进化 | `feedback` + `evolve`；`close` 默检地图；`migrate --backfill-map-fingerprints` |
-| MCP | 15 工具与 CLI 对齐；推荐 `python -m multi_agent_memory.mcp_server` |
-| 本地检索索引 | `meta/search-index.json` 加速 recall/locate（Markdown 仍是真相源） |
+| 功能地图 | `map upsert` / `locate` / `map maintain` / `map coverage` / `map seed` / `map-health`；`map_status` + `draft_upserts` |
+| 机械同步 | `sync`（一把锁批量 stale + 一次 reindex）；`close` 默认跑 sync；语义地图仍靠 Agent 补写 |
+| 自我进化 | `feedback` + `evolve --apply`（批量写）；`migrate --backfill-map-fingerprints` |
+| 伴生探测 | `doctor`/`sync`/`overview` 探测 GitNexus / AOCI（**不捆绑安装**） |
+| MCP | 19 工具与 CLI 对齐（含 `memory_clean` / `memory_sync` / `memory_recall`）；推荐 `python -m multi_agent_memory.mcp_server` |
+| 本地检索索引 | `meta/search-index.json`；`meta/map-status.json`（sessionStart 轻量缓存） |
 | 零运行时依赖 | 仅需 Python ≥ 3.10；CJK 二元组召回 + 置信度加权 |
 | 并发安全 | 跨平台写锁、原子替换 |
 
@@ -147,7 +153,7 @@ pip install "git+https://github.com/qxcool/multi-agent-memory.git@v0.7.4#subdire
 ├── wiki/          项目知识与 feature 地图
 ├── inbox/         候选
 ├── archive/       归档与 forgotten/
-├── meta/          侧车检索索引（可再生）
+├── meta/          search-index.json + map-status.json（均可再生）
 └── INDEX.md       总索引 + 活动任务速览
 ```
 

@@ -1,4 +1,4 @@
-"""零依赖 MCP stdio 服务：orient / handoff / locate / coverage / seed / close 等 15 工具。"""
+"""零依赖 MCP stdio 服务：orient / handoff / locate / sync / coverage / seed / close 等工具。"""
 
 from __future__ import annotations
 
@@ -6,16 +6,24 @@ import json
 import sys
 from typing import Any
 
-from .hub import MemoryHub, MemoryHubError, resolve_hub
+from .hub import (
+    CONFIDENCE_LEVELS,
+    FEEDBACK_SIGNALS,
+    MEMORY_TYPES,
+    MemoryHub,
+    MemoryHubError,
+    resolve_hub,
+    search_results_as_dict,
+)
 
 
 SERVER_NAME = "multi-agent-memory"
-SERVER_VERSION = "0.7.4"
+SERVER_VERSION = "0.7.6"
 
 TOOLS = [
     {
         "name": "memory_orient",
-        "description": "开场：doctor/status/context 一站式装配（缓存友好）。返回 context 文本供注入。",
+        "description": "开场：doctor/status/context 一站式装配（缓存友好）。含 map_status；返回 context 文本供注入。",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -142,7 +150,7 @@ TOOLS = [
     },
     {
         "name": "memory_map_health",
-        "description": "只读检查功能地图；返回 issues 与 suggested_actions（可执行 CLI）。",
+        "description": "只读检查功能地图；返回 map_status(aligned|drifted|incomplete)、draft_upserts、suggested_actions。",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -177,8 +185,44 @@ TOOLS = [
         },
     },
     {
+        "name": "memory_map_maintain",
+        "description": "变更驱动：按改动仓库相对路径签发受影响功能地图的 draft_upserts。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "paths": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "本次改动的仓库相对路径",
+                },
+                "limit": {"type": "integer", "default": 200},
+                "hub": {"type": "string"},
+            },
+            "required": ["paths"],
+        },
+    },
+    {
+        "name": "memory_sync",
+        "description": "机械同步：evolve+reindex+map_health；可选 seed。check_only 只读。返回 draft_upserts/companions。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "check_only": {"type": "boolean", "default": False},
+                "seed": {"type": "boolean", "default": False},
+                "apply_forget": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "forget 高置信错误记忆（wrong>=2 且 >useful）",
+                },
+                "agent": {"type": "string", "default": "cursor"},
+                "max_seed": {"type": "integer", "default": 40},
+                "hub": {"type": "string"},
+            },
+        },
+    },
+    {
         "name": "memory_close",
-        "description": "收尾：completed + distill；默认附带 map_health。可选 archive / evolve_maps。",
+        "description": "收尾：completed + distill + 默认 sync；maintenance_required 时须先补地图再视为完成。",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -188,6 +232,7 @@ TOOLS = [
                 "archive": {"type": "boolean", "default": False},
                 "evolve_maps": {"type": "boolean", "default": False},
                 "check_maps": {"type": "boolean", "default": True},
+                "seed_maps": {"type": "boolean", "default": False},
                 "hub": {"type": "string"},
             },
             "required": ["task", "agent"],
@@ -202,9 +247,17 @@ TOOLS = [
                 "agent": {"type": "string"},
                 "text": {"type": "string"},
                 "tags": {"type": "string", "description": "逗号分隔标签"},
-                "type": {"type": "string", "default": "note"},
+                "type": {
+                    "type": "string",
+                    "enum": sorted(MEMORY_TYPES),
+                    "default": "note",
+                },
                 "key": {"type": "string"},
-                "confidence": {"type": "string", "default": "unspecified"},
+                "confidence": {
+                    "type": "string",
+                    "enum": sorted(CONFIDENCE_LEVELS),
+                    "default": "unspecified",
+                },
                 "source_task": {"type": "string"},
                 "hub": {"type": "string"},
             },
@@ -217,7 +270,10 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "signal": {"type": "string", "enum": ["useful", "stale", "wrong"]},
+                "signal": {
+                    "type": "string",
+                    "enum": sorted(FEEDBACK_SIGNALS),
+                },
                 "id": {"type": "string", "description": "记忆 id（mem-…）"},
                 "path": {"type": "string"},
                 "reason": {"type": "string"},
@@ -227,8 +283,23 @@ TOOLS = [
         },
     },
     {
+        "name": "memory_recall",
+        "description": "全文检索记忆（短结果）；管理类操作仍用 CLI：migrate/reindex/stats/list。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "limit": {"type": "integer", "default": 8},
+                "min_score": {"type": "integer", "default": 1},
+                "collection": {"type": "string"},
+                "hub": {"type": "string"},
+            },
+            "required": ["query"],
+        },
+    },
+    {
         "name": "memory_evolve",
-        "description": "自我进化扫描。默认 dry-run；apply 写入 stale/confirm；apply_forget 可真正 forget。",
+        "description": "自我进化扫描。默认 dry-run；apply 写入 stale/confirm；apply_forget 对 auto_forget 候选真正 forget。",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -239,8 +310,20 @@ TOOLS = [
         },
     },
     {
+        "name": "memory_clean",
+        "description": "清理高置信错误记忆（wrong>=min_wrong 且 >useful）。默认 dry-run；apply=true 移入 archive/forgotten。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "apply": {"type": "boolean", "default": False},
+                "min_wrong": {"type": "integer", "default": 2},
+                "hub": {"type": "string"},
+            },
+        },
+    },
+    {
         "name": "memory_doctor",
-        "description": "检查记忆库健康；返回 warnings 与可执行 fixes。",
+        "description": "检查记忆库健康；返回 map_status、warnings 与可执行 fixes。",
         "inputSchema": {
             "type": "object",
             "properties": {"hub": {"type": "string"}},
@@ -355,6 +438,26 @@ def _call_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
                 max_features=int(arguments.get("max_features") or 40),
             )
         )
+    if name == "memory_map_maintain":
+        raw_paths = arguments.get("paths") or []
+        if not isinstance(raw_paths, list):
+            raise MemoryHubError("paths 必须是字符串数组")
+        return _tool_result(
+            hub.map_maintain(
+                paths=[str(item) for item in raw_paths],
+                limit=int(arguments.get("limit") or 200),
+            )
+        )
+    if name == "memory_sync":
+        return _tool_result(
+            hub.sync(
+                check_only=bool(arguments.get("check_only")),
+                seed=bool(arguments.get("seed")),
+                apply_forget=bool(arguments.get("apply_forget")),
+                agent=str(arguments.get("agent") or "cursor"),
+                max_seed=int(arguments.get("max_seed") or 40),
+            )
+        )
     if name == "memory_close":
         check_maps = arguments.get("check_maps")
         if check_maps is None:
@@ -366,6 +469,7 @@ def _call_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
             do_archive=bool(arguments.get("archive")),
             check_maps=bool(check_maps),
             evolve_maps=bool(arguments.get("evolve_maps")),
+            seed_maps=bool(arguments.get("seed_maps")),
         )
         return _tool_result(result)
     if name == "memory_remember":
@@ -391,11 +495,26 @@ def _call_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
             reason=str(arguments["reason"]) if arguments.get("reason") else None,
         )
         return _tool_result(result)
+    if name == "memory_recall":
+        results = hub.recall(
+            query=str(arguments["query"]),
+            limit=int(arguments.get("limit") or 8),
+            min_score=int(arguments.get("min_score") or 1),
+            collection=str(arguments["collection"]) if arguments.get("collection") else None,
+        )
+        return _tool_result(search_results_as_dict(results))
     if name == "memory_evolve":
         return _tool_result(
             hub.evolve(
                 apply=bool(arguments.get("apply")),
                 apply_forget=bool(arguments.get("apply_forget")),
+            )
+        )
+    if name == "memory_clean":
+        return _tool_result(
+            hub.clean(
+                apply=bool(arguments.get("apply")),
+                min_wrong=int(arguments.get("min_wrong") or 2),
             )
         )
     if name == "memory_doctor":

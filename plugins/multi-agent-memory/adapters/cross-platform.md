@@ -9,7 +9,8 @@
 | Windows | `.\plugins\multi-agent-memory\scripts\install.ps1` |
 | macOS / Linux | `./plugins/multi-agent-memory/scripts/install.sh` |
 
-脚本会：`pip install` CLI，并把 Skill **链接**到本机各宿主目录（Win=junction，Unix=symlink）。
+脚本会：`pip install` CLI，并把 Skill **链接**到本机各宿主目录（Win=junction，Unix=symlink）。  
+装完即可被宿主发现，**不必**再改项目 `AGENTS.md`；MCP / hooks 仍为可选。
 
 ```bash
 # 验证（两台机器都要能跑）
@@ -53,7 +54,7 @@ memory-hub --hub "$MEMORY_HUB_ROOT" doctor
 
 | 要做 | 不要做 |
 |---|---|
-| `map upsert --path "src/auth/refresh.ts"`（仓库相对、正斜杠） | `--path "D:\proj\src\..."` / `/Users/me/proj/...` |
+| `map upsert --path "src/auth/refresh.ts"`（主仓相对、正斜杠；`.worktree/<名>/…` 会自动剥离） | `--path "D:\proj\src\..."` / `/Users/me/proj/...`；把工作树副本路径当真相源入库 |
 | 命令写跨平台或注明 OS：`npm test` / `pytest` | 把仅 Win 的 `.\foo.ps1` 当成 Mac 也能跑的唯一命令 |
 | 地图路径大小写与仓库一致（macOS 默认大小写不敏感，Linux 敏感） | 依赖「Windows 不区分大小写」写错路径 |
 

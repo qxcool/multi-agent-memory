@@ -7,6 +7,7 @@ SKIP_PIP=0
 PROJECT_AGENTS=0
 PROJECT_CURSOR=0
 PROJECT_QODER=0
+CURSOR_HOOKS=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -30,8 +31,12 @@ while [[ $# -gt 0 ]]; do
       PROJECT_QODER=1
       shift
       ;;
+    --cursor-hooks)
+      CURSOR_HOOKS=1
+      shift
+      ;;
     -h|--help)
-      echo "Usage: $0 [--hosts claude,cursor,deepseek,opencode,qoder,codex] [--skip-pip] [--project-agents] [--project-cursor] [--project-qoder]"
+      echo "Usage: $0 [--hosts claude,cursor,…] [--skip-pip] [--project-agents] [--project-cursor] [--project-qoder] [--cursor-hooks]"
       exit 0
       ;;
     *)
@@ -118,11 +123,52 @@ if [[ "$PROJECT_QODER" -eq 1 ]]; then
   link_skill "$REPO_ROOT/.qoder/skills/multi-agent-memory"
 fi
 
+if [[ "$CURSOR_HOOKS" -eq 1 ]]; then
+  HOOKS_SRC="$PLUGIN_ROOT/adapters/cursor/hooks"
+  HOOKS_DST="$REPO_ROOT/.cursor/hooks"
+  mkdir -p "$HOOKS_DST"
+  cp "$HOOKS_SRC"/*.py "$HOOKS_DST/"
+  PY_HOOK="python"
+  if command -v python3 >/dev/null 2>&1 && ! command -v python >/dev/null 2>&1; then
+    PY_HOOK="python3"
+  fi
+  if [[ "$PY_HOOK" == "python3" ]]; then
+    sed 's/"command": "python /"command": "python3 /g' \
+      "$PLUGIN_ROOT/adapters/cursor/hooks.json" > "$REPO_ROOT/.cursor/hooks.json"
+  else
+    cp "$PLUGIN_ROOT/adapters/cursor/hooks.json" "$REPO_ROOT/.cursor/hooks.json"
+  fi
+  echo "installed Cursor hooks -> $HOOKS_DST and $REPO_ROOT/.cursor/hooks.json (interpreter: $PY_HOOK)"
+fi
+
 echo
 echo "Done. Verify:"
 echo "  python3 -c 'import multi_agent_memory as m; print(m.__version__)'"
 echo "  memory-hub doctor"
+echo "  memory-hub sync --check"
 echo "Agent short names: claude | codex | cursor | deepseek | opencode | qoder"
 echo "Shared workflow: $PLUGIN_ROOT/adapters/shared-workflow.md"
 echo "Cross-platform:  $PLUGIN_ROOT/adapters/cross-platform.md"
 echo "Adapters: $PLUGIN_ROOT/adapters/README.md"
+echo "Optional Cursor hooks: $0 --cursor-hooks"
+echo
+echo "Companions (detect only, never auto-installed):"
+PY_BIN=""
+if command -v python3 >/dev/null 2>&1; then
+  PY_BIN=python3
+elif command -v python >/dev/null 2>&1; then
+  PY_BIN=python
+fi
+if [[ -n "$PY_BIN" ]] && "$PY_BIN" - <<'PY'
+from multi_agent_memory.hub import probe_companions
+c = probe_companions()
+for name in ("gitnexus", "aoci"):
+    item = c.get(name) or {}
+    print(f"  {name}: {item.get('status')} — {item.get('role')}")
+print("  Install yourself if needed; see adapters/shared-workflow.md")
+PY
+then
+  :
+else
+  echo "  (probe skipped — run: memory-hub doctor)"
+fi

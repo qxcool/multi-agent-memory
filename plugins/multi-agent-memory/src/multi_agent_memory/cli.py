@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from pathlib import Path
 from typing import Any, Sequence
 
 from .hub import (
@@ -159,7 +158,41 @@ def _parser() -> argparse.ArgumentParser:
     orient.add_argument("--include-inferred", action="store_true")
     orient.add_argument("--auto-migrate", action="store_true", help="若 doctor 提示落后则自动 migrate")
 
-    close = subparsers.add_parser("close", help="收尾一站式：completed + distill + 可选 archive")
+    sync = subparsers.add_parser(
+        "sync",
+        help="机械同步：evolve --apply + reindex + map_health；可选 --seed",
+    )
+    sync.add_argument(
+        "--check",
+        action="store_true",
+        help="只读：map_status / draft_upserts / companions，不写",
+    )
+    sync.add_argument(
+        "--seed",
+        action="store_true",
+        help="对未覆盖顶层执行 map seed --apply（仅草稿路径）",
+    )
+    sync.add_argument("--agent", default="cursor", help="--seed 时写入地图的代理短名")
+    sync.add_argument("--max-seed", type=int, default=40)
+    sync.add_argument(
+        "--apply-forget",
+        action="store_true",
+        help="顺带 forget 高置信错误记忆（wrong>=2 且 >useful）",
+    )
+
+    clean = subparsers.add_parser(
+        "clean",
+        help="清理高置信错误记忆（默认 dry-run；--apply 移入 archive/forgotten）",
+    )
+    clean.add_argument("--apply", action="store_true", help="真正 forget 候选项")
+    clean.add_argument(
+        "--min-wrong",
+        type=int,
+        default=2,
+        help="自动清理门槛：feedback_wrong 至少这么多且多于 useful（默认 2）",
+    )
+
+    close = subparsers.add_parser("close", help="收尾一站式：completed + distill + 默认 sync")
     close.add_argument("--task", required=True)
     close.add_argument("--agent", required=True)
     close.add_argument("--lesson")
@@ -169,12 +202,17 @@ def _parser() -> argparse.ArgumentParser:
     close.add_argument(
         "--no-check-maps",
         action="store_true",
-        help="跳过收尾时的功能地图健康检查",
+        help="跳过收尾时的 sync（不推荐）",
     )
     close.add_argument(
         "--evolve-maps",
         action="store_true",
-        help="收尾时对缺失/漂移地图执行 evolve --apply",
+        help="兼容旧开关：等同默认 sync（已含 evolve --apply）",
+    )
+    close.add_argument(
+        "--seed-maps",
+        action="store_true",
+        help="收尾 sync 时顺带 map seed --apply",
     )
 
     evolve = subparsers.add_parser("evolve", help="自我进化扫描（默认 dry-run；--apply 写入）")
@@ -182,7 +220,7 @@ def _parser() -> argparse.ArgumentParser:
     evolve.add_argument(
         "--apply-forget",
         action="store_true",
-        help="与 --apply 联用：对 suggest_forget 项真正执行 forget",
+        help="与 --apply 联用：对 auto_forget 候选真正 forget（同 clean --apply）",
     )
 
     handoff = subparsers.add_parser("handoff", help="跨代理交接包：status + locate + 踩坑 + 地图问题")
@@ -269,6 +307,19 @@ def _parser() -> argparse.ArgumentParser:
     map_seed.add_argument("--apply", action="store_true", help="真正写入（默认只预览）")
     map_seed.add_argument("--max-features", type=int, default=40)
     map_seed.add_argument("--min-source-files", type=int, default=1)
+    map_maintain = map_sub.add_parser(
+        "maintain",
+        help="变更驱动：按改动路径签发受影响地图的 draft_upserts",
+    )
+    map_maintain.add_argument(
+        "--path",
+        dest="paths",
+        action="append",
+        default=[],
+        required=True,
+        help="本次改动的仓库相对路径，可重复",
+    )
+    map_maintain.add_argument("--limit", type=int, default=200)
 
     locate = subparsers.add_parser("locate", help="按功能/路径线索定位地图（短结果）")
     locate.add_argument("--query", required=True)
@@ -369,7 +420,45 @@ def _print_human(command: str, result: Any) -> None:
     if command == "evolve" and isinstance(result, dict):
         print(f"apply: {result.get('apply')}  counts: {result.get('counts')}")
         for item in result.get("planned") or []:
-            print(f"- {item.get('action')}: {item.get('feature')} — {item.get('reason')}")
+            flag = " [auto]" if item.get("auto_forget") else ""
+            print(f"- {item.get('action')}{flag}: {item.get('feature')} — {item.get('reason')}")
+        return
+    if command == "clean" and isinstance(result, dict):
+        print(f"apply: {result.get('apply')}  counts: {result.get('counts')}")
+        for item in result.get("candidates") or []:
+            print(
+                f"- {item.get('feature') or item.get('memory_id')}: "
+                f"wrong={item.get('wrong')} useful={item.get('useful')} — {item.get('reason')}"
+            )
+        for item in result.get("forgotten") or []:
+            print(f"  forgotten: {item.get('from')} → {item.get('to')}")
+        if result.get("hint"):
+            print(result["hint"])
+        return
+    if command == "sync" and isinstance(result, dict):
+        print(
+            f"map_status: {result.get('map_status')}  "
+            f"maintenance_required: {result.get('maintenance_required')}  "
+            f"check_only: {result.get('check_only')}"
+        )
+        if result.get("reindex") is not None:
+            print(f"reindex: {result.get('reindex')}")
+        if result.get("evolve"):
+            print(f"evolve: {result['evolve'].get('counts')}")
+        if result.get("seed"):
+            print(f"seed: {result['seed'].get('counts')}")
+        cleanup = result.get("cleanup") or {}
+        if cleanup.get("counts"):
+            print(f"cleanup candidates: {cleanup['counts'].get('candidates')}")
+        for draft in (result.get("draft_upserts") or [])[:8]:
+            print(f"  draft: {draft.get('suggested_cli')}  # {','.join(draft.get('reasons') or [])}")
+        companions = result.get("companions") or {}
+        for name in ("gitnexus", "aoci"):
+            item = companions.get(name) or {}
+            if item:
+                print(f"companion {name}: {item.get('status')}")
+        if result.get("hint"):
+            print(result["hint"])
         return
     if command in {"map-health", "close"} and isinstance(result, dict):
         health = result.get("map_health") if command == "close" else result
@@ -379,10 +468,20 @@ def _print_human(command: str, result: Any) -> None:
                 print(f"distill: {result.get('distill')}")
             if result.get("archive"):
                 print(f"archive: {result.get('archive')}")
+            print(
+                f"map_status: {result.get('map_status')}  "
+                f"maintenance_required: {result.get('maintenance_required')}"
+            )
+            if result.get("sync") and result["sync"].get("reindex") is not None:
+                print(f"sync.reindex: {result['sync'].get('reindex')}")
+            for draft in (result.get("draft_upserts") or [])[:8]:
+                print(f"  draft: {draft.get('suggested_cli')}  # {','.join(draft.get('reasons') or [])}")
+            if result.get("hint"):
+                print(result["hint"])
         if isinstance(health, dict):
             counts = health.get("counts") or {}
             print(
-                f"map_health: ok={health.get('ok')}  "
+                f"map_health: status={health.get('map_status')}  ok={health.get('ok')}  "
                 f"checked={counts.get('maps_checked')}  issues={counts.get('issues')}  "
                 f"missing={counts.get('missing')}  drifted={counts.get('drifted')}  "
                 f"no_fp={counts.get('no_fingerprint')}"
@@ -398,7 +497,10 @@ def _print_human(command: str, result: Any) -> None:
                 if item.get("stale_tagged"):
                     bits.append("已标stale")
                 print(f"- {item.get('feature')}: {'；'.join(bits) or 'issue'}")
-            if health.get("hint"):
+            if command == "map-health":
+                for draft in (health.get("draft_upserts") or [])[:8]:
+                    print(f"  draft: {draft.get('suggested_cli')}")
+            if health.get("hint") and command == "map-health":
                 print(health["hint"])
         if command == "close" and result.get("evolve"):
             evolved = result["evolve"]
@@ -474,7 +576,7 @@ def _print_human(command: str, result: Any) -> None:
             print(f"  - {item.get('path')}: {item.get('title')}")
         map_health = result.get("map_health") or {}
         if map_health:
-            print(f"map_health: {map_health.get('counts')}")
+            print(f"map_health: status={map_health.get('map_status')}  {map_health.get('counts')}")
             for feature in map_health.get("top_issues") or []:
                 print(f"  - issue: {feature}")
         print("continue_with:")
@@ -500,7 +602,16 @@ def _print_human(command: str, result: Any) -> None:
         print(result.get("hint", ""))
         return
     if command in {"doctor", "map-health"} and isinstance(result, dict):
-        print(f"ok: {result.get('ok')}  hub: {result.get('hub')}")
+        print(
+            f"ok: {result.get('ok')}  map_status: {result.get('map_status')}  "
+            f"hub: {result.get('hub')}"
+        )
+        companions = result.get("companions") or {}
+        if companions and command == "doctor":
+            for name in ("gitnexus", "aoci"):
+                item = companions.get(name) or {}
+                if item:
+                    print(f"companion {name}: {item.get('status')}  # {item.get('role')}")
         for key in ("issues", "warnings"):
             values = result.get(key) or []
             if values:
@@ -522,6 +633,8 @@ def _print_human(command: str, result: Any) -> None:
                 )
                 if issue.get("suggested_cli"):
                     print(f"    cli: {issue.get('suggested_cli')}")
+            for draft in (result.get("draft_upserts") or [])[:8]:
+                print(f"  draft: {draft.get('suggested_cli')}  # {','.join(draft.get('reasons') or [])}")
         if result.get("hint"):
             print(result.get("hint"))
         return
@@ -624,6 +737,16 @@ def run(argv: Sequence[str] | None = None) -> int:
                 include_inferred=args.include_inferred,
                 auto_migrate=args.auto_migrate,
             )
+        elif args.command == "sync":
+            result = hub.sync(
+                check_only=args.check,
+                seed=args.seed,
+                apply_forget=args.apply_forget,
+                agent=args.agent,
+                max_seed=args.max_seed,
+            )
+        elif args.command == "clean":
+            result = hub.clean(apply=args.apply, min_wrong=args.min_wrong)
         elif args.command == "close":
             result = hub.close(
                 task=args.task,
@@ -634,6 +757,7 @@ def run(argv: Sequence[str] | None = None) -> int:
                 do_archive=args.archive,
                 check_maps=not args.no_check_maps,
                 evolve_maps=args.evolve_maps,
+                seed_maps=args.seed_maps,
             )
         elif args.command == "evolve":
             result = hub.evolve(apply=args.apply, apply_forget=args.apply_forget)
@@ -680,6 +804,8 @@ def run(argv: Sequence[str] | None = None) -> int:
                     max_features=args.max_features,
                     min_source_files=args.min_source_files,
                 )
+            elif args.map_command == "maintain":
+                result = hub.map_maintain(paths=args.paths, limit=args.limit)
             else:
                 raise MemoryHubError(f"未知 map 子命令：{args.map_command}")
         elif args.command == "locate":

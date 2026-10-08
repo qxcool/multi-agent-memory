@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Cursor stop：可选自动跟进 close/evolve/map（默认关闭，避免打扰）。"""
+"""Cursor stop：默认跟进 sync/close；MEMORY_HUB_STOP_FOLLOWUP=0 关闭。"""
 
 from __future__ import annotations
 
@@ -15,14 +15,17 @@ def main() -> int:
         payload = {}
     status = str(payload.get("status") or "")
     loop_count = int(payload.get("loop_count") or 0)
-    enabled = os.environ.get("MEMORY_HUB_STOP_FOLLOWUP", "").strip() in {"1", "true", "yes"}
+    # 默认开启；显式 0/false/no/off 关闭
+    flag = os.environ.get("MEMORY_HUB_STOP_FOLLOWUP", "1").strip().casefold()
+    enabled = flag not in {"0", "false", "no", "off"}
     out: dict[str, str] = {}
-    if enabled and status == "completed" and loop_count == 0 and os.environ.get("MEMORY_HUB_ROOT"):
+    if enabled and status == "completed" and loop_count == 0:
         out["followup_message"] = (
-            "若本会话完成了有价值改动，请运行："
-            "`memory-hub close --task <task> --agent cursor`，"
-            "并对改动功能 `map upsert`（或 `map-health` / `evolve`）。"
-            "命中地图后勿全仓 rg。若无需收尾可忽略。"
+            "若本会话有代码/记忆相关改动，请先："
+            "`memory-hub sync`（或 `close --task <task> --agent cursor`）；"
+            "若 maintenance_required / map_status≠aligned，"
+            "必须按 draft_upserts 执行 map upsert，未对齐前勿视为收尾完成。"
+            "语义补写靠 Agent；GitNexus/AOCI 不捆绑。关闭跟进：MEMORY_HUB_STOP_FOLLOWUP=0。"
         )
     print(json.dumps(out, ensure_ascii=False))
     return 0

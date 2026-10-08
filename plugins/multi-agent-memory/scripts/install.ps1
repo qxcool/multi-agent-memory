@@ -12,7 +12,8 @@ param(
   [switch] $SkipPip,
   [switch] $ProjectAgents,
   [switch] $ProjectCursor,
-  [switch] $ProjectQoder
+  [switch] $ProjectQoder,
+  [switch] $CursorHooks
 )
 
 $ErrorActionPreference = "Stop"
@@ -55,9 +56,9 @@ function New-SkillLink {
   }
 }
 
+$py = $null
 if (-not $SkipPip) {
   Write-Host "Installing Python package from $PluginRoot ..."
-  $py = $null
   foreach ($candidate in @("python", "python3", "py")) {
     if (Get-Command $candidate -ErrorAction SilentlyContinue) {
       $py = $candidate
@@ -111,11 +112,56 @@ if ($ProjectQoder) {
   New-SkillLink -Destination $projQ
 }
 
+if (-not $py) {
+  foreach ($candidate in @("python", "python3", "py")) {
+    if (Get-Command $candidate -ErrorAction SilentlyContinue) {
+      $py = $candidate
+      break
+    }
+  }
+}
+
+if ($CursorHooks) {
+  $hooksSrc = Join-Path $PluginRoot "adapters\cursor\hooks"
+  $hooksJsonSrc = Join-Path $PluginRoot "adapters\cursor\hooks.json"
+  $hooksDst = Join-Path $RepoRoot ".cursor\hooks"
+  New-Item -ItemType Directory -Force -Path $hooksDst | Out-Null
+  Copy-Item -Path (Join-Path $hooksSrc "*.py") -Destination $hooksDst -Force
+  $hooksJsonDst = Join-Path $RepoRoot ".cursor\hooks.json"
+  $pyCmd = if ($py) { if ($py -eq "py") { "py -3" } else { $py } } else { "python" }
+  $jsonText = Get-Content -Raw -Path $hooksJsonSrc
+  if ($pyCmd -eq "python3") {
+    $jsonText = $jsonText -replace '"command": "python ', '"command": "python3 '
+  }
+  Set-Content -Path $hooksJsonDst -Value $jsonText -Encoding utf8
+  Write-Host "installed Cursor hooks -> $hooksDst and $hooksJsonDst (interpreter: $pyCmd)"
+}
+
 Write-Host ""
 Write-Host "Done. Verify:"
 Write-Host "  python -c `"import multi_agent_memory as m; print(m.__version__)`""
 Write-Host "  memory-hub doctor"
+Write-Host "  memory-hub sync --check"
 Write-Host "Agent short names: claude | codex | cursor | deepseek | opencode | qoder"
 Write-Host "Shared workflow: $PluginRoot\adapters\shared-workflow.md"
 Write-Host "Cross-platform:  $PluginRoot\adapters\cross-platform.md"
 Write-Host "Adapters: $PluginRoot\adapters\README.md"
+Write-Host "Optional Cursor hooks: install.ps1 -CursorHooks"
+Write-Host ""
+Write-Host "Companions (detect only, never auto-installed):"
+try {
+  if (-not $py) { throw "no python" }
+  $pyArgs = @("-c", "from multi_agent_memory.hub import probe_companions; import json; print(json.dumps(probe_companions(), ensure_ascii=False))")
+  if ($py -eq "py") { $pyArgs = @("-3") + $pyArgs }
+  $probe = & $py @pyArgs 2>$null
+  if ($LASTEXITCODE -eq 0 -and $probe) {
+    $obj = $probe | ConvertFrom-Json
+    Write-Host ("  gitnexus: " + $obj.gitnexus.status + " — " + $obj.gitnexus.role)
+    Write-Host ("  aoci:     " + $obj.aoci.status + " — " + $obj.aoci.role)
+    Write-Host "  Install yourself if needed; see adapters/shared-workflow.md"
+  } else {
+    Write-Host "  (probe skipped — run: memory-hub doctor)"
+  }
+} catch {
+  Write-Host "  (probe skipped — run: memory-hub doctor)"
+}

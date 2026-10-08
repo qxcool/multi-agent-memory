@@ -154,12 +154,20 @@ class ScenarioEvals(unittest.TestCase):
     def test_doctor_and_map_health_expose_actions(self) -> None:
         report = self.hub.doctor()
         self.assertIn("fixes", report)
+        self.assertIn("map_status", report)
+        self.assertIn("companions", report)
         health = self.hub.map_health()
         self.assertIn("suggested_actions", health)
+        self.assertIn("map_status", health)
+        self.assertIn("draft_upserts", health)
         overview = self.hub.overview()
         self.assertIn("continue_with", overview)
         self.assertIn("map_health", overview)
+        self.assertIn("map_status", overview["map_health"])
         self.assertIn("map_coverage", overview)
+        self.assertIn("companions", overview)
+        synced = self.hub.sync(check_only=True)
+        self.assertIn("companions", synced)
 
 
 if __name__ == "__main__":

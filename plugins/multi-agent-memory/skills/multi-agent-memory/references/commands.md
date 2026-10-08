@@ -10,17 +10,25 @@
 ```bash
 HUB orient --task auth --agent cursor --query "认证刷新" --objective "修刷新"
 HUB handoff --task auth --agent cursor --to-agent claude
-HUB close --task auth --agent cursor --lesson "刷新必须单例" --archive
-HUB close --task auth --agent cursor --evolve-maps   # 收尾时顺带 evolve --apply
-HUB map-health              # 只读：缺失/漂移/缺指纹 + suggested_actions
-HUB evolve              # 扫描
-HUB evolve --apply      # 写入 stale/confirm
+HUB sync                # 一把锁：批量 evolve --apply + 一次 reindex + map_health
+HUB sync --check        # 只读 map_status / draft_upserts / companions
+HUB sync --seed         # 另 seed 未覆盖顶层草稿
+HUB close --task auth --agent cursor --lesson "刷新必须单例" --archive   # 默认含 sync
+HUB close --task auth --agent cursor --seed-maps
+HUB map-health          # map_status + draft_upserts + 写 meta/map-status.json
+HUB evolve              # 扫描（dry-run）
+HUB evolve --apply      # 一把锁批量写入 + 一次索引更新
 HUB evolve --apply --apply-forget
+HUB clean               # 高置信错误记忆（dry-run）
+HUB clean --apply       # forget → archive/forgotten
+HUB sync --apply-forget # sync 时顺带 clean
 ```
 
-`orient`：doctor →（可选 migrate）→ status（含检索词）→ context（含 L0.5 + 末尾 L1）。  
-`close`：completed → distill → 可选 archive；默认附带 `map_health`（`--no-check-maps` 跳过；`--evolve-maps` 写入）。  
-`evolve`：失效/漂移路径标 stale（写入 `stale_reason`）；高 useful 巩固；高 wrong 建议 forget。
+`orient`：doctor（复用 map_health）→（可选 migrate）→ status → context；含 `map_status`；无库可 init。  
+`sync`：机械保证（批量标 stale + 重建检索索引）；语义补写仍靠 Agent；写 `meta/map-status.json`。  
+`close`：completed → distill → 可选 archive → **默认 sync**；返回 `map_status` / `draft_upserts` / `maintenance_required`（未 aligned 前勿视为完成）。  
+`evolve`：失效/漂移路径标 stale（写入 `stale_reason`）；高 useful 巩固；高 wrong 建议 forget。  
+`clean`：仅清理 **wrong≥2 且 wrong>useful** 的记忆/地图（默认 dry-run）；不删 CORE/sessions。
 
 ## 发现与升级
 
@@ -47,6 +55,7 @@ HUB map upsert --agent cursor --feature auth-refresh \
 HUB locate --query "认证刷新"     # 含 hits + scope + hint；命中勿全仓 rg
 HUB map list
 HUB map coverage                  # 未映射顶层热点
+HUB map maintain --path src/foo.py   # 改完：签发受影响地图 draft
 HUB map-health
 HUB feedback --id mem-xxxxxxxx --signal stale --reason "路径已迁移"
 ```
@@ -127,13 +136,14 @@ python -m multi_agent_memory.mcp_server
 | `memory_map_health` | 地图健康 + suggested_actions |
 | `memory_map_coverage` | 顶层覆盖率 / 未映射热点 |
 | `memory_map_seed` | 播种地图草稿（默认 dry-run） |
-| `memory_close` | 收尾 + 默检地图 |
+| `memory_sync` | 机械同步 evolve+reindex |
+| `memory_close` | 收尾 + 默认 sync |
 | `memory_remember` | 写入 inbox 候选 |
 | `memory_feedback` | useful / stale / wrong |
 | `memory_evolve` | 自我进化（默认 dry-run） |
-| `memory_doctor` | 健康检查 + fixes |
+| `memory_doctor` | 健康检查 + companions + fixes |
 
-参数与场景详见 **[mcp-tools.md](mcp-tools.md)**（共 15 个工具）。
+参数与场景详见 **[mcp-tools.md](mcp-tools.md)**（共 16 个工具）。
 
 ## 多宿主安装
 
