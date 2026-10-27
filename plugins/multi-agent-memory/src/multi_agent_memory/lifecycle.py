@@ -136,7 +136,7 @@ class LifecycleMixin:
         root = Path(project_root).expanduser().resolve() if project_root else self.root.parent
         companions = probe_companions(project_root=root)
         if check_only:
-            health = self.map_health()
+            health = self.map_health(cache_status=False)
             map_status = str(health.get("map_status") or "incomplete")
             drafts = list(health.get("draft_upserts") or [])
             cleanup = self.clean(apply=False)
@@ -148,17 +148,20 @@ class LifecycleMixin:
                 "draft_upserts": drafts,
                 "maintenance_required": map_status != "aligned",
                 "cleanup": cleanup,
+                "fingerprint_refresh": None,
                 "evolve": None,
                 "reindex": None,
                 "seed": None,
                 "companions": companions,
                 "hint": (
                     f"map_status={map_status}（只读）。"
-                    "完整机械同步：memory-hub sync；语义补写按 draft_upserts；"
+                    "完整机械同步：memory-hub sync（含路径指纹刷新）；语义补写按 draft_upserts；"
                     "错误记忆：memory-hub clean --apply。"
                 ),
             }
 
+        # 先机械刷指纹（FRAS-S），再 evolve，避免「内容改过」被反复标 stale
+        fingerprint_refresh = self.refresh_map_fingerprints()
         # 规划在锁外；一把锁内批量 feedback/forget + 单次 reindex
         planned = self._evolve_plan()
         with self._write_lock():
@@ -205,6 +208,7 @@ class LifecycleMixin:
         ]
         if apply_forget:
             cleanup_left = []
+        fp_n = int(fingerprint_refresh.get("updated") or 0)
         if maintenance:
             hint = (
                 f"sync 完成；map_status={map_status}，maintenance_required。"
@@ -212,6 +216,11 @@ class LifecycleMixin:
             )
         else:
             hint = "sync 完成；map_status=aligned。检索索引已重建。"
+        if fp_n:
+            hint += f" 已机械刷新 {fp_n} 条地图路径指纹。"
+        stub_n = int((health.get("counts") or {}).get("stub_role") or 0) if isinstance(health.get("counts"), dict) else 0
+        if stub_n and not maintenance:
+            hint += f" 另有 {stub_n} 条 seed/空职责可补 role（不阻塞收尾）。"
         if cleanup_left and not apply_forget:
             hint += f" 另有 {len(cleanup_left)} 条错误记忆可 clean --apply / sync --apply-forget。"
         return {
@@ -221,6 +230,7 @@ class LifecycleMixin:
             "map_health": health,
             "draft_upserts": drafts,
             "maintenance_required": maintenance,
+            "fingerprint_refresh": fingerprint_refresh,
             "cleanup": {
                 "candidates": cleanup_left,
                 "counts": {"candidates": len(cleanup_left)},
@@ -247,8 +257,8 @@ class LifecycleMixin:
         sync_maps: bool = True,
         seed_maps: bool = False,
     ) -> dict[str, object]:
-        """收尾一站式：completed → distill → 可选 archive → 默认 sync（机械维护）。"""
-        status = self.update_status(task=task, agent=agent, state="completed")
+        """收尾一站式：completed → distill → 默认 sync；地图对齐后可选 archive。"""
+        status = self.update_status(task=task, agent=agent, state="completed", next_step="")
         distilled = self.distill(
             task=task,
             agent=agent,
@@ -256,7 +266,6 @@ class LifecycleMixin:
             promote_inbox=promote_inbox,
             pin_core=pin_core,
         )
-        archived = self.archive(task) if do_archive else None
         # sync_maps 默认开；--no-check-maps 时 check_maps=False 且跳过；evolve_maps 兼容旧开关
         do_sync = bool(sync_maps and check_maps) or bool(evolve_maps)
         sync_report = self.sync(seed=seed_maps, agent=agent) if do_sync else None
@@ -273,15 +282,18 @@ class LifecycleMixin:
                 + (f"：{features}" if features else "")
                 + "；未补写前勿视为收尾完成"
             )
-            status = self.update_status(task=task, agent=agent, state="completed", next_step=next_step)
+            status = self.update_status(task=task, agent=agent, state="maintenance-required", next_step=next_step)
             hint = (
                 f"maintenance_required：map_status={map_status}。"
                 "按 draft_upserts 补写后 memory-hub sync --check；未对齐前勿视为任务收尾完成。"
             )
+            if do_archive:
+                hint += " 地图对齐后重新 close --archive。"
         elif sync_report is not None:
             hint = "收尾完成；map_status=aligned（已 sync）。"
         else:
             hint = "收尾完成（已跳过地图 sync）。"
+        archived = self.archive(task) if do_archive and not maintenance_required else None
         return {
             "task": task,
             "agent": agent,

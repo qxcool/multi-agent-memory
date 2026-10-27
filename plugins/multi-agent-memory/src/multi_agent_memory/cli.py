@@ -229,7 +229,7 @@ def _parser() -> argparse.ArgumentParser:
     handoff.add_argument("--to-agent", help="接收方短名（默认与 --agent 相同）")
     handoff.add_argument("--limit", type=int, default=5)
 
-    map_health = subparsers.add_parser("map-health", help="只读检查功能地图缺失/漂移/缺指纹")
+    map_health = subparsers.add_parser("map-health", help="检查功能地图缺失/漂移/缺指纹并刷新状态缓存")
     map_health.add_argument("--limit", type=int, default=200)
 
     distill = subparsers.add_parser(
@@ -463,7 +463,7 @@ def _print_human(command: str, result: Any) -> None:
     if command in {"map-health", "close"} and isinstance(result, dict):
         health = result.get("map_health") if command == "close" else result
         if command == "close":
-            print(f"task: {result.get('task')}  agent: {result.get('agent')}  state: completed")
+            print(f"task: {result.get('task')}  agent: {result.get('agent')}  state: {result.get('status', {}).get('state')}")
             if result.get("distill"):
                 print(f"distill: {result.get('distill')}")
             if result.get("archive"):
@@ -484,7 +484,7 @@ def _print_human(command: str, result: Any) -> None:
                 f"map_health: status={health.get('map_status')}  ok={health.get('ok')}  "
                 f"checked={counts.get('maps_checked')}  issues={counts.get('issues')}  "
                 f"missing={counts.get('missing')}  drifted={counts.get('drifted')}  "
-                f"no_fp={counts.get('no_fingerprint')}"
+                f"no_fp={counts.get('no_fingerprint')}  stub_role={counts.get('stub_role')}"
             )
             for item in (health.get("issues") or [])[:10]:
                 bits = []
@@ -496,6 +496,8 @@ def _print_human(command: str, result: Any) -> None:
                     bits.append("缺指纹")
                 if item.get("stale_tagged"):
                     bits.append("已标stale")
+                if item.get("stub_role"):
+                    bits.append("seed/空职责")
                 print(f"- {item.get('feature')}: {'；'.join(bits) or 'issue'}")
             if command == "map-health":
                 for draft in (health.get("draft_upserts") or [])[:8]:

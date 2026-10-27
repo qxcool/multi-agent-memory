@@ -30,11 +30,11 @@ def _map_status_line(hub: Path) -> str | None:
     """只读 meta/map-status.json；缺失则提示 sync --check，绝不跑 list_maps。"""
     cache = hub / "meta" / "map-status.json"
     if not cache.is_file():
-        return "尚无 map-status 缓存；有空跑 memory-hub sync --check。"
+        return "尚无 map-status 缓存；有空跑 memory-hub map-health。"
     try:
         data = json.loads(cache.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        return "map-status 缓存不可读；请 memory-hub sync --check。"
+        return "map-status 缓存不可读；请 memory-hub map-health。"
     if not isinstance(data, dict):
         return None
     status = str(data.get("map_status") or "unknown")
@@ -59,8 +59,8 @@ def main() -> int:
         "[multi-agent-memory]",
         "开场优先：memory-hub orient --task <task> --agent cursor --query \"<固定检索词>\" --objective \"…\"",
         "将返回的 context 整段注入一次；勿叠 locate+context 双前缀。",
-        "定位：先 memory-hub locate --query \"…\"；命中则打开 paths，禁止全仓 rg/Glob。",
-        "变动后：memory-hub sync（机械：evolve+reindex）；语义 map upsert 仍靠 Agent。",
+        "定位：先 memory-hub locate --query \"…\"；验证并打开 paths，失效或范围不足时再搜索代码。",
+        "变动后：memory-hub sync（机械：指纹刷新+evolve+reindex）；语义 map upsert 仍靠 Agent。",
         "收尾：memory-hub close --task <task> --agent cursor（默认含 sync）。",
         "分工：MAM=功能/教训/交接；GitNexus=符号图；AOCI=可选全量认知（均不捆绑）。",
     ]

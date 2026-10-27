@@ -22,10 +22,9 @@ def main() -> int:
     if enabled and status == "completed" and loop_count == 0:
         out["followup_message"] = (
             "若本会话有代码/记忆相关改动，请先："
-            "`memory-hub sync`（或 `close --task <task> --agent cursor`）；"
-            "若 maintenance_required / map_status≠aligned，"
-            "必须按 draft_upserts 执行 map upsert，未对齐前勿视为收尾完成。"
-            "语义补写靠 Agent；GitNexus/AOCI 不捆绑。关闭跟进：MEMORY_HUB_STOP_FOLLOWUP=0。"
+            "`memory-hub sync`（机械含路径指纹刷新）或 `close --task <task> --agent cursor`；"
+            "若仍 maintenance_required（多为缺路径/语义），按 draft_upserts 做 map upsert，"
+            "未对齐前勿视为收尾完成。GitNexus/AOCI 不捆绑。关闭：MEMORY_HUB_STOP_FOLLOWUP=0。"
         )
     print(json.dumps(out, ensure_ascii=False))
     return 0

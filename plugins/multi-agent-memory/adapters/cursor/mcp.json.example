@@ -1,4 +1,5 @@
 {
+  "_comment": "On Windows prefer absolute python.exe (Cursor PATH often misses the env with the package). After code changes: pip install -U <plugin-root>. Bare 'python' may point at another interpreter.",
   "mcpServers": {
     "multi-agent-memory": {
       "command": "python",

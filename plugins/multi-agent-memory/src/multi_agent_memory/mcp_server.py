@@ -93,7 +93,7 @@ TOOLS = [
         "name": "memory_locate",
         "description": (
             "按功能名/路径定位 feature 地图（含 FRAS 关联扩展）。"
-            "命中返回 scope.paths/commands，优先打开、勿全仓 rg；未命中返回 draft_upsert。"
+            "命中返回 scope.paths/commands，先验证并打开；路径失效或范围不足再有范围搜索；未命中返回 draft_upsert。"
         ),
         "inputSchema": {
             "type": "object",
@@ -203,7 +203,7 @@ TOOLS = [
     },
     {
         "name": "memory_sync",
-        "description": "机械同步：evolve+reindex+map_health；可选 seed。check_only 只读。返回 draft_upserts/companions。",
+        "description": "机械同步：指纹刷新+evolve+reindex+map_health；可选 seed。check_only 只读。返回 draft_upserts/companions。",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -222,7 +222,7 @@ TOOLS = [
     },
     {
         "name": "memory_close",
-        "description": "收尾：completed + distill + 默认 sync；maintenance_required 时须先补地图再视为完成。",
+        "description": "收尾：completed + distill + 默认 sync；maintenance_required 时状态转为 maintenance-required 并延后归档。",
         "inputSchema": {
             "type": "object",
             "properties": {

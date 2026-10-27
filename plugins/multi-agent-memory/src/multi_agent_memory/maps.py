@@ -90,10 +90,10 @@ SOURCE_FILE_SUFFIXES = {
     ".sh",
 }
 LOCATE_MISS_HINT = (
-    "未命中功能地图。请先 map upsert 写入该功能的 paths；"
-    "勿直接全仓 rg/Glob。架构溯源可用 GitNexus。"
+    "未命中功能地图。先搜索代码定位入口，再 map upsert 写入该功能的 paths；"
+    "架构溯源可用 GitNexus。"
 )
-LOCATE_HIT_HINT = "已命中功能地图：优先打开返回的 paths/commands，勿全仓 rg/Glob。"
+LOCATE_HIT_HINT = "已命中功能地图：先验证并打开 paths/commands；路径失效或范围不足时再搜索代码。"
 RELATED_MAP_SCORE_FLOOR = 4
 
 
@@ -273,6 +273,16 @@ def _map_upsert_cli(feature: str, *, paths: Sequence[str] = (), role: str = "") 
     return " ".join(parts)
 
 
+def _is_stub_role(role: str) -> bool:
+    """seed / 空职责：需 Agent 补语义，不单独把 map_status 打成 incomplete。"""
+    text = one_line(role)
+    if not text:
+        return True
+    if "待补充" in text:
+        return True
+    return text in {"（无）", "(无)", "…", "..."}
+
+
 def _derive_map_status(
     *,
     maps_checked: int,
@@ -281,7 +291,7 @@ def _derive_map_status(
     stale_tagged: int = 0,
     no_fingerprint: int = 0,
 ) -> str:
-    """轻量对齐态：aligned | drifted | incomplete。"""
+    """轻量对齐态：aligned | drifted | incomplete（路径/指纹；不含 stub_role）。"""
     if maps_checked < 1:
         return "incomplete"
     if missing or drifted or stale_tagged:
@@ -1148,8 +1158,95 @@ class MapsMixin:
             ),
         }
 
-    def map_health(self, *, limit: int = 200) -> dict[str, object]:
-        """只读检查功能地图：缺失、漂移、缺指纹、已标 stale；附 map_status / draft_upserts。"""
+    def refresh_map_fingerprints(self) -> dict[str, object]:
+        """机械刷新 FRAS-S：路径仍在则更新 path_fingerprints，并去掉仅因漂移打的 stale。
+
+        有 missing 路径的地图跳过（语义债仍靠 Agent upsert）。
+        """
+        self._ensure_initialized()
+        project_root = self.root.parent
+        candidates: list[tuple[Path, dict[str, object], str, dict[str, str], bool]] = []
+        for collection in ("wiki", "experiences", "inbox"):
+            base = self.root / collection
+            if not base.is_dir():
+                continue
+            for path in base.glob("*.md"):
+                if path.name == "INDEX.md":
+                    continue
+                try:
+                    metadata, body = split_frontmatter(path.read_text(encoding="utf-8"))
+                except (OSError, UnicodeDecodeError):
+                    continue
+                key = metadata.get("key") if isinstance(metadata.get("key"), str) else ""
+                tags_raw = metadata.get("tags", [])
+                tag_list = (
+                    [str(item) for item in tags_raw] if isinstance(tags_raw, list) else []
+                )
+                tag_folded = {t.casefold() for t in tag_list}
+                is_map = key.casefold().startswith("feature:") or "map" in tag_folded
+                if not is_map:
+                    continue
+                meta_paths = metadata.get("paths")
+                path_list = [str(item) for item in meta_paths] if isinstance(meta_paths, list) else []
+                if not path_list:
+                    continue
+                inspected = _inspect_map_paths(
+                    project_root,
+                    path_list,
+                    _normalize_path_fingerprints(metadata.get("path_fingerprints")),
+                )
+                if inspected["missing"]:
+                    continue
+                new_fps = _path_fingerprints_for(project_root, path_list)
+                old_fps = _normalize_path_fingerprints(metadata.get("path_fingerprints"))
+                is_stale = bool(tag_folded & {"stale", "disputed"})
+                if new_fps == old_fps and not is_stale:
+                    continue
+                if not new_fps and not is_stale:
+                    continue
+                candidates.append((path, metadata, body, new_fps, is_stale))
+
+        updated: list[str] = []
+        cleared_stale: list[str] = []
+        if not candidates:
+            return {
+                "hub": str(self.root),
+                "updated": 0,
+                "cleared_stale": 0,
+                "paths": [],
+            }
+
+        stamp = now().isoformat(timespec="seconds")
+        with self._write_lock():
+            for path, metadata, body, new_fps, was_stale in candidates:
+                metadata["path_fingerprints"] = new_fps
+                metadata["updated_at"] = stamp
+                if "authority" not in metadata:
+                    metadata["authority"] = ""
+                metadata["stale_reason"] = ""
+                tags_raw = metadata.get("tags", [])
+                if isinstance(tags_raw, list):
+                    kept = [
+                        str(tag)
+                        for tag in tags_raw
+                        if str(tag).casefold() not in {"stale", "disputed"}
+                    ]
+                    metadata["tags"] = kept
+                rel = path.relative_to(self.root).as_posix()
+                atomic_write(path, frontmatter(metadata) + body.lstrip("\n"))
+                updated.append(rel)
+                if was_stale:
+                    cleared_stale.append(rel)
+            self._touch_index_unlocked(collections=("wiki", "experiences", "inbox"))
+        return {
+            "hub": str(self.root),
+            "updated": len(updated),
+            "cleared_stale": len(cleared_stale),
+            "paths": updated,
+        }
+
+    def map_health(self, *, limit: int = 200, cache_status: bool = True) -> dict[str, object]:
+        """检查功能地图；默认刷新状态缓存，cache_status=False 时不写入。"""
         self._ensure_initialized()
         if limit < 1:
             raise MemoryHubError("limit 必须大于 0")
@@ -1160,6 +1257,7 @@ class MapsMixin:
         drifted_count = 0
         no_fingerprint_count = 0
         stale_tagged = 0
+        stub_role_count = 0
         for item in maps:
             missing = [str(rel) for rel in (item.get("missing_paths") or [])]
             drifted = [str(rel) for rel in (item.get("drifted_paths") or [])]
@@ -1173,7 +1271,9 @@ class MapsMixin:
                 _file_paths_missing_fingerprint(self.root.parent, on_disk, fps)
             )
             is_stale = "stale" in tags or "disputed" in tags
-            if not (missing or drifted or needs_fp or is_stale):
+            role = str(item.get("role") or "")
+            stub_role = _is_stub_role(role)
+            if not (missing or drifted or needs_fp or is_stale or stub_role):
                 continue
             if missing:
                 missing_count += 1
@@ -1183,12 +1283,14 @@ class MapsMixin:
                 no_fingerprint_count += 1
             if is_stale:
                 stale_tagged += 1
-            role = str(item.get("role") or "")
+            if stub_role:
+                stub_role_count += 1
             keep_paths = [p for p in paths if p not in missing][:3] or missing[:2]
+            # stub 职责勿回填进 CLI，逼 Agent 写真实 role
             suggested = _map_upsert_cli(
                 str(item.get("feature") or "feature"),
                 paths=keep_paths,
-                role=role,
+                role="" if stub_role else role,
             )
             reasons: list[str] = []
             if missing:
@@ -1199,6 +1301,8 @@ class MapsMixin:
                 reasons.append("needs_fingerprint")
             if is_stale:
                 reasons.append("stale")
+            if stub_role:
+                reasons.append("stub_role")
             issues.append(
                 {
                     "feature": item.get("feature"),
@@ -1208,6 +1312,7 @@ class MapsMixin:
                     "drifted_paths": drifted,
                     "needs_fingerprint": needs_fp,
                     "stale_tagged": is_stale,
+                    "stub_role": stub_role,
                     "stale_reason": item.get("stale_reason"),
                     "suggested_cli": suggested,
                 }
@@ -1217,7 +1322,7 @@ class MapsMixin:
                     "feature": item.get("feature"),
                     "key": item.get("key"),
                     "memory_id": item.get("memory_id"),
-                    "role": role or None,
+                    "role": None if stub_role else (role or None),
                     "paths": keep_paths,
                     "reasons": reasons,
                     "suggested_cli": suggested,
@@ -1240,14 +1345,32 @@ class MapsMixin:
                     "reason": "批量补录路径指纹",
                 }
             )
+        if stub_role_count:
+            actions.append(
+                {
+                    "id": "fill-stub-roles",
+                    "command": "memory-hub map upsert --agent <agent> --feature \"…\" --role \"真实职责\" --path \"…\"",
+                    "reason": f"{stub_role_count} 条 seed/空职责待补（不阻塞 map_status）",
+                }
+            )
         for issue in issues[:8]:
             cli = str(issue.get("suggested_cli") or "")
             if cli:
+                reasons = []
+                for draft in draft_upserts:
+                    if draft.get("feature") == issue.get("feature"):
+                        reasons = list(draft.get("reasons") or [])
+                        break
+                reason = (
+                    "补写 seed 职责"
+                    if reasons == ["stub_role"]
+                    else "刷新该功能地图路径/指纹/职责"
+                )
                 actions.append(
                     {
                         "id": f"repair-{issue.get('feature')}",
                         "command": cli,
-                        "reason": "刷新该功能地图路径/指纹",
+                        "reason": reason,
                     }
                 )
         maps_checked = len(maps)
@@ -1259,7 +1382,9 @@ class MapsMixin:
             no_fingerprint=no_fingerprint_count,
         )
         if map_status == "aligned":
-            hint = "map_status=aligned；无需补写。"
+            hint = "map_status=aligned；路径/指纹无需补写。"
+            if stub_role_count:
+                hint += f" 另有 {stub_role_count} 条 seed/空职责可按 draft_upserts 补 role。"
         elif maps_checked < 1:
             hint = "map_status=incomplete：尚无功能地图；先 map seed / map upsert。"
         else:
@@ -1278,13 +1403,15 @@ class MapsMixin:
                 "drifted": drifted_count,
                 "no_fingerprint": no_fingerprint_count,
                 "stale_tagged": stale_tagged,
+                "stub_role": stub_role_count,
             },
             "issues": issues,
             "draft_upserts": draft_upserts,
             "suggested_actions": actions,
             "hint": hint,
         }
-        self._write_map_status_cache(result)
+        if cache_status:
+            self._write_map_status_cache(result)
         return result
 
     def _map_status_cache_path(self) -> Path:

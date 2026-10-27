@@ -14,7 +14,7 @@ description: >-
 # Multi-Agent Memory
 
 跨 Win / macOS / Linux；兼容 Claude / Codex / Cursor / DeepSeek / OpenCode / Qoder。  
-用可审阅 Markdown 共享记忆。写操作必须走 CLI（写锁）。
+用可审阅 Markdown 共享记忆。写操作通过 CLI 或 MCP 执行，共用写锁。
 
 ```bash
 python "<skill>/scripts/memory_hub.py" overview
@@ -77,8 +77,8 @@ HUB --hub "$MEMORY_HUB_ROOT" doctor   # PowerShell 用 "$env:MEMORY_HUB_ROOT"
 ### 功能定位（防全仓检索）
 
 1. **先** `HUB locate --query "<功能或路径>"`（或 `orient`/`context` 里的 L0.5）
-2. **命中** → 按当前检出根打开返回的 `scope.paths` / 执行 `commands`；**禁止**再全仓 `rg`/`Glob`/`find`
-3. **未命中** → `map upsert` / `map seed` 补地图后再继续；架构/调用链溯源用 **GitNexus**
+2. **命中** → 按当前检出根验证并打开 `scope.paths`，按需执行 `commands`；若路径失效或范围不足，再做有范围的代码搜索
+3. **未命中** → 搜索代码定位入口，再 `map upsert` 补地图；冷启动可先 `map seed`。架构/调用链溯源可用 **GitNexus**
 4. 改完功能必须 `map upsert`；收尾看 `close` 的 `map_status` / `draft_upserts`，未 aligned 前勿视为完成
 5. 冷启动：`HUB map coverage` → `HUB map seed --agent <agent> --apply` → 再补 role/links
 6. **工作树**：地图只存**主仓相对路径**（如 `src/foo.py`）。在 `.worktree/<名>/…` 里干活时：`locate` 仍用功能名/主仓路径；`map upsert --path` 可传工作树路径，CLI 会剥成主仓路径。打开文件时相对**当前检出根**解析 `scope.paths`
@@ -103,10 +103,10 @@ HUB sync --seed       # 另对未覆盖顶层 map seed --apply（仅草稿）
 
 | 可自动保证 | 不能无人保证 |
 |---|---|
-| 漂移标 stale、`reindex`、`map_status` / `draft_upserts` | 功能职责 / authority / 教训正文（Agent 补） |
+| 路径指纹刷新、漂移标 stale、`reindex`、`map_status` / `draft_upserts` | 功能职责 / authority / 教训正文（Agent 补） |
 | `close` 默认跑 sync；`orient` 无库时可 `init` | GitNexus / AOCI（只探测，不捆绑安装） |
 
-`map-health` / `sync` 会写 `meta/map-status.json`；Cursor `sessionStart` **只读该缓存**（不扫盘）。  
+`map-health` / 普通 `sync` 会写 `meta/map-status.json`；`sync --check` 不写缓存。Cursor `sessionStart` **只读该缓存**（不扫盘）。
 `doctor` 复用 `map_health`，避免开场双重全库地图扫描。
 
 `maintenance_required` 时按 `draft_upserts` 补写后 `sync --check`；未 aligned 前勿视为收尾完成。
@@ -146,13 +146,13 @@ HUB map-health
 ### 3) Close（推荐一站式）
 
 ```bash
-HUB sync
 HUB close --task <task> --agent <agent>
 HUB close --task <task> --agent <agent> --lesson "一行短教训" --archive
 HUB close --task <task> --agent <agent> --seed-maps
 ```
 
-等价：`status --state completed` → `distill` → 可选 `archive` → **默认 sync**。  
+等价：`status --state completed` → `distill` → **默认 sync** → 地图对齐后可选 `archive`。
+若需维护，状态为 `maintenance-required`，`--archive` 会延后；补齐后重新 `close --archive`。
 若 `maintenance_required=true` 或 `map_status`≠`aligned`：按 `draft_upserts[].suggested_cli` 补写后再 `sync --check`；**未对齐前勿视为收尾完成**。
 
 ## MCP（可选，与 CLI 等价）

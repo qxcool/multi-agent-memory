@@ -69,8 +69,8 @@
 按功能名/路径定位 feature 地图（含 FRAS 关联扩展）。  
 **必填**：`query`。  
 **可选**：`limit`, `hub`。  
-**命中**：优先打开返回的 `scope.paths` / `commands`，**禁止**全仓 `rg`/`Glob`/`find`。  
-**未命中**：用 `draft_upsert` 或 `memory_map_upsert` 补地图；架构/影响面用 GitNexus（见 `scope.gitnexus_hint`）。
+**命中**：先验证并打开返回的 `scope.paths` / `commands`；路径失效或范围不足时再做有范围的代码搜索。
+**未命中**：搜索代码定位入口，再用 `draft_upsert` 或 `memory_map_upsert` 补地图；架构/影响面可用 GitNexus（见 `scope.gitnexus_hint`）。
 
 ### memory_context
 

@@ -144,11 +144,12 @@ class MemoryHubTests(unittest.TestCase):
         self.assertTrue((self.root / result["to"]).is_file())
 
     def test_context_full_includes_memory_body(self) -> None:
-        self.hub.remember(
+        remembered = self.hub.remember(
             agent="cursor",
             text="认证刷新必须复用同一个任务且附带详细约束说明段落",
             memory_type="decision",
         )
+        self.hub.promote(to="experiences", memory_id=str(remembered["id"]))
         summary = self.hub.context("认证刷新", max_chars=20_000)
         full = self.hub.context("认证刷新", max_chars=20_000, full=True)
         self.assertIn("认证刷新必须复用同一个任务", full)
@@ -268,12 +269,18 @@ class MemoryHubTests(unittest.TestCase):
             self.hub.update_status(task="../outside", agent="codex")
 
     def test_remember_recall_and_context(self) -> None:
-        self.hub.remember(agent="codex", text="车型比较结果需要生成分享图片", tags=["vehicle", "share"])
+        remembered = self.hub.remember(
+            agent="codex", text="车型比较结果需要生成分享图片", tags=["vehicle", "share"]
+        )
         results = self.hub.recall("车型 分享", limit=5)
         self.assertTrue(results)
         self.assertIn("inbox/", results[0].path)
+        # L2 默认 experiences；inbox 属 L3 不进 context
+        inbox_ctx = self.hub.context("车型")
+        self.assertIn("Core Memory", inbox_ctx)
+        self.assertNotIn("车型比较", inbox_ctx)
+        self.hub.promote(to="experiences", memory_id=str(remembered["id"]))
         context = self.hub.context("车型")
-        self.assertIn("Core Memory", context)
         self.assertIn("车型比较", context)
 
     def test_remember_writes_traceable_frontmatter(self) -> None:
@@ -660,7 +667,10 @@ class MemoryHubTests(unittest.TestCase):
         self.assertIn("map upsert", str(miss["hint"]))
 
         closed = self.hub.close(task="life", agent="cursor", lesson="开场用 orient，收尾用 close")
-        self.assertEqual("completed", closed["status"]["state"])
+        self.assertEqual(
+            "maintenance-required" if closed["maintenance_required"] else "completed",
+            closed["status"]["state"],
+        )
         self.assertTrue(closed["distill"]["lessons_updated"])
         self.assertIsNone(closed["archive"])
         self.assertIsNotNone(closed.get("map_health"))
@@ -749,6 +759,7 @@ class MemoryHubTests(unittest.TestCase):
         self.assertIsNotNone(evolved_close["evolve"])
         self.assertGreaterEqual(evolved_close["evolve"]["counts"]["mark_stale"], 1)
         self.assertTrue(evolved_close["maintenance_required"])
+        self.assertEqual("maintenance-required", evolved_close["status"]["state"])
         self.assertEqual("drifted", evolved_close["map_status"])
         self.assertTrue(any(d.get("feature") == "ghost-close" for d in evolved_close["draft_upserts"]))
 
@@ -773,33 +784,110 @@ class MemoryHubTests(unittest.TestCase):
         self.hub.upsert_map(agent="cursor", feature="api", role="api", paths=["svc/api.py"])
         tracked.write_text("v2\n", encoding="utf-8")
 
+        cache_path = self.root / "meta" / "map-status.json"
+        cache_before = cache_path.read_bytes() if cache_path.exists() else None
         checked = self.hub.sync(check_only=True)
         self.assertTrue(checked["check_only"])
-        self.assertIn(checked["map_status"], {"aligned", "drifted", "incomplete"})
+        self.assertEqual("drifted", checked["map_status"])
         self.assertIn("companions", checked)
         self.assertIn("gitnexus", checked["companions"])
         self.assertIn("aoci", checked["companions"])
-        cache = self.hub.read_map_status_cache()
-        self.assertIsNotNone(cache)
-        self.assertEqual(cache.get("map_status"), checked["map_status"])
+        self.assertEqual(cache_before, cache_path.read_bytes() if cache_path.exists() else None)
 
         synced = self.hub.sync()
+        cache = self.hub.read_map_status_cache()
+        self.assertIsNotNone(cache)
+        self.assertEqual(cache.get("map_status"), synced["map_status"])
         self.assertFalse(synced["check_only"])
         self.assertIsNotNone(synced["reindex"])
         self.assertIsNotNone(synced["evolve"])
         self.assertTrue(synced["evolve"]["apply"])
-        self.assertGreaterEqual(int(synced["evolve"]["counts"]["mark_stale"]), 1)
-        self.assertTrue(synced["maintenance_required"] or synced["map_status"] == "aligned")
-        self.assertTrue(
-            any(d.get("feature") == "api" for d in synced["draft_upserts"])
-            or synced["map_status"] == "aligned"
-        )
+        # 指纹漂移由 sync 机械刷新，不应再 maintenance / mark_stale
+        self.assertGreaterEqual(int(synced["fingerprint_refresh"]["updated"]), 1)
+        self.assertEqual("aligned", synced["map_status"])
+        self.assertFalse(synced["maintenance_required"])
+        self.assertEqual(0, int(synced["evolve"]["counts"]["mark_stale"]))
 
         companions = probe_companions(project_root=project)
         self.assertIn(companions["gitnexus"]["status"], {"available", "missing"})
         self.assertIn(companions["aoci"]["status"], {"available", "missing"})
         # 无二进制时必须 missing，不得抛错
         self.assertIsInstance(companions["hint"], str)
+
+    def test_map_health_reports_stub_role_without_blocking_aligned(self) -> None:
+        project = self.root.parent
+        tracked = project / "docs" / "guide.md"
+        tracked.parent.mkdir(parents=True)
+        tracked.write_text("# guide\n", encoding="utf-8")
+        self.hub.upsert_map(
+            agent="cursor",
+            feature="docs-guide",
+            role="docs 区域入口（seed，待补充职责）",
+            paths=["docs/guide.md"],
+            confidence="inferred",
+        )
+        health = self.hub.map_health()
+        self.assertEqual("aligned", health["map_status"])
+        self.assertTrue(health["ok"])
+        self.assertGreaterEqual(int(health["counts"]["stub_role"]), 1)
+        stub = next(i for i in health["issues"] if i.get("feature") == "docs-guide")
+        self.assertTrue(stub.get("stub_role"))
+        draft = next(d for d in health["draft_upserts"] if d.get("feature") == "docs-guide")
+        self.assertIn("stub_role", draft["reasons"])
+        self.assertIn('--role "…"', draft["suggested_cli"])
+        self.assertIn("seed/空职责", health["hint"])
+
+    def test_close_defers_archive_until_map_is_aligned(self) -> None:
+        # 缺路径才阻塞归档；纯内容指纹漂移由 sync 机械刷新
+        self.hub.upsert_map(
+            agent="codex",
+            feature="feature",
+            role="entry",
+            paths=["src/missing-feature.py"],
+        )
+
+        pending = self.hub.close(task="deferred", agent="codex", do_archive=True)
+        self.assertTrue(pending["maintenance_required"])
+        self.assertEqual("maintenance-required", pending["status"]["state"])
+        self.assertIsNone(pending["archive"])
+        self.assertTrue((self.root / "sessions" / "deferred").is_dir())
+
+        project_file = self.root.parent / "src" / "feature.py"
+        project_file.parent.mkdir(parents=True)
+        project_file.write_text("ready\n", encoding="utf-8")
+        self.hub.upsert_map(
+            agent="codex",
+            feature="feature",
+            role="entry",
+            paths=["src/feature.py"],
+            merge_paths=False,
+        )
+        finished = self.hub.close(task="deferred", agent="codex", do_archive=True)
+        self.assertFalse(finished["maintenance_required"])
+        self.assertEqual("completed", finished["status"]["state"])
+        self.assertIsNotNone(finished["archive"])
+        self.assertTrue((self.root / "archive" / "sessions" / "deferred").is_dir())
+
+    def test_context_l2_excludes_sessions_and_memory(self) -> None:
+        self.hub.update_status(
+            task="noise-task",
+            agent="cursor",
+            objective="sessions should not flood L2",
+            query="噪声主题召回",
+        )
+        remembered = self.hub.remember(
+            agent="cursor",
+            text="噪声主题召回：这是 experiences 里该出现的教训",
+            key="pitfall:noise-theme",
+            memory_type="event",
+            tags=["pitfall", "lesson"],
+            confidence="confirmed",
+        )
+        self.hub.promote(to="experiences", memory_id=str(remembered["id"]))
+        ctx = self.hub.context(query="噪声主题召回", max_chars=12000, include_maps=False)
+        self.assertIn("pitfall:noise-theme", ctx)
+        self.assertNotIn("## L2 召回：sessions/", ctx)
+        self.assertNotIn("## L2 召回：memory/", ctx)
 
     def test_doctor_reuses_map_health_status(self) -> None:
         project = self.root.parent

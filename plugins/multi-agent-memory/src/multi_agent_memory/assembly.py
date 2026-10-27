@@ -359,12 +359,12 @@ class AssemblyMixin:
         if query:
             recalled: list[SearchResult] = []
             seen_paths: set[str] = set(map_paths)
+            # L2 = experiences（或显式 collection）；勿灌 sessions/memory（过程态，非经验）
             passes: list[dict[str, object]] = []
             if collection:
                 passes.append({"collection": collection, "limit": 8})
             else:
-                passes.append({"collection": "experiences", "limit": 5})
-                passes.append({"collection": None, "limit": 8})
+                passes.append({"collection": "experiences", "limit": 8})
             for options in passes:
                 for result in self.recall(
                     query,
@@ -377,6 +377,10 @@ class AssemblyMixin:
                     collection=options["collection"] if isinstance(options["collection"], str) else None,
                 ):
                     if result.path in seen_paths:
+                        continue
+                    rel = str(result.path).replace("\\", "/")
+                    top = rel.split("/", 1)[0].casefold()
+                    if top in {"sessions", "memory", "archive"}:
                         continue
                     if not include_inferred:
                         try:

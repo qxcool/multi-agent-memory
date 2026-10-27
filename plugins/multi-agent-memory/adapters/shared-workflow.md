@@ -29,8 +29,8 @@ memory-hub map seed --agent <agent> --apply  # 播种草稿后再补 role/links
 memory-hub locate --query "<功能名或路径>"
 ```
 
-1. **命中** → 打开返回的 `scope.paths` / 跑 `commands`；**禁止**全仓 `rg` / Glob / find  
-2. **未命中** → 用 `draft_upsert` 或 `map upsert` 补地图后再继续  
+1. **命中** → 验证并打开 `scope.paths` / 按需跑 `commands`；路径失效或范围不足时再做有范围的代码搜索
+2. **未命中** → 搜索代码定位入口，再用 `draft_upsert` 或 `map upsert` 补地图
 3. **工作树** → 地图写主仓相对路径；`--path .worktree/<名>/src/…` 会被剥成 `src/…`；打开文件相对当前检出根  
 4. **架构 / 调用链 / 影响面** → 用 GitNexus（`scope.gitnexus_hint`）；不要用全仓文本扫代替地图  
 
@@ -42,7 +42,7 @@ memory-hub map upsert --agent <agent> --feature "<名>" \
 
 分工：本插件 = 功能入口 / 教训 / 交接；GitNexus = 符号图；AOCI（可选）= 全量文件认知。勿互相替代；**均不捆绑安装**（`doctor`/`sync` 只探测）。  
 `doctor` / `orient` / `map-health` / `sync` 看 `map_status`（`aligned` | `drifted` | `incomplete`）。  
-变动后：`memory-hub sync`（机械：evolve + reindex）；语义仍靠 Agent `map upsert`。
+变动后：`memory-hub sync`（机械：指纹刷新 + evolve + reindex）；语义仍靠 Agent `map upsert`。
 
 ## 交接 / 踩坑
 
@@ -57,15 +57,13 @@ memory-hub feedback --id mem-… --signal useful
 ## 收尾 / 同步
 
 ```bash
-memory-hub sync
-memory-hub sync --check
 memory-hub close --task <task> --agent <agent>
 memory-hub close --task <task> --agent <agent> --lesson "一行短教训" --archive
 memory-hub close --task <task> --agent <agent> --seed-maps
 ```
 
 `sync` / `close` 返回 `map_status` / `draft_upserts` / `maintenance_required` / `companions`。  
-未 aligned 时按草稿 `map upsert`，**未补齐前勿视为收尾完成**。
+未 aligned 时状态为 `maintenance-required`，按草稿 `map upsert`；`--archive` 会延后，补齐后重新 `close --archive`。
 
 ## MCP（各宿主可选）
 

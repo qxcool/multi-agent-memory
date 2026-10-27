@@ -26,7 +26,7 @@ HUB sync --apply-forget # sync 时顺带 clean
 
 `orient`：doctor（复用 map_health）→（可选 migrate）→ status → context；含 `map_status`；无库可 init。  
 `sync`：机械保证（批量标 stale + 重建检索索引）；语义补写仍靠 Agent；写 `meta/map-status.json`。  
-`close`：completed → distill → 可选 archive → **默认 sync**；返回 `map_status` / `draft_upserts` / `maintenance_required`（未 aligned 前勿视为完成）。  
+`close`：completed → distill → **默认 sync**（含路径指纹机械刷新）→ 地图对齐后可选 archive；缺路径等语义问题仍为 `maintenance-required` 且延后归档。返回 `map_status` / `draft_upserts` / `maintenance_required`。
 `evolve`：失效/漂移路径标 stale（写入 `stale_reason`）；高 useful 巩固；高 wrong 建议 forget。  
 `clean`：仅清理 **wrong≥2 且 wrong>useful** 的记忆/地图（默认 dry-run）；不删 CORE/sessions。
 
